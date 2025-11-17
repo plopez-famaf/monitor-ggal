@@ -26,11 +26,14 @@ El background thread colecta datos en UN worker, pero los requests HTTP van a OT
 3. Encuentra el campo **"Start Command"**
 4. **Cambia** de `gunicorn app:app` a:
    ```
-   gunicorn --workers=1 --threads=2 --timeout=120 app:app
+   gunicorn -c gunicorn_config.py app:app
    ```
 5. Click **"Save Changes"**
 
-**IMPORTANTE:** Esto sobrescribe el Procfile. Render no usa Procfile automáticamente para Web Services.
+**IMPORTANTE:**
+- Esto usa el archivo `gunicorn_config.py` que configura workers=1, threads=2, timeout=120
+- El archivo también maneja el inicio correcto del background thread con el hook `post_fork()`
+- Sin este hook, se crean múltiples threads que causan inconsistencias en los datos
 
 ### Paso 3: Configurar Variable de Entorno
 

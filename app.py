@@ -99,14 +99,9 @@ if not api_key:
 monitor = MonitorGGAL(api_key=api_key)
 forecaster = GGALForecaster(min_samples=10)
 
-# Iniciar monitoreo en background thread
-# IMPORTANT: Only start if not already running (prevents multiple threads in multi-worker scenarios)
-if not monitor.running:
-    print(f"🚀 Starting background monitoring thread (PID: {os.getpid()})")
-    thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
-    thread.start()
-else:
-    print(f"⚠️  Background thread already running, skipping initialization")
+# Background thread initialization moved to gunicorn_config.py post_fork hook
+# This prevents duplicate threads when Gunicorn forks worker processes
+# For local development with `python app.py`, the thread is started in __main__ block below
 
 # Routes
 
@@ -199,5 +194,11 @@ def trading_signal():
     return jsonify(signal)
 
 if __name__ == '__main__':
+    # Start background thread for local development (not needed when using gunicorn)
+    if not monitor.running:
+        print(f"🚀 [Local Dev] Starting background monitoring thread (PID: {os.getpid()})")
+        thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
+        thread.start()
+
     port = int(os.environ.get('PORT', 5001))
     app.run(debug=False, host='0.0.0.0', port=port)

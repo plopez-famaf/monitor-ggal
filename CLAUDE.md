@@ -25,10 +25,14 @@ See [README.md](README.md) for user-facing documentation.
 
 ### Data Flow
 
-1. Background daemon thread continuously polls Finnhub API → `obtener_precio()`
-2. Price data appended to in-memory `historial` deque (max 1000 entries)
-3. Frontend polls API endpoints every 10 seconds
-4. Forecaster analyzes price history on demand to generate predictions
+1. **Production (Gunicorn)**: `gunicorn_config.py` `post_fork()` hook starts background thread after worker fork
+2. **Local Dev**: Thread started in `__main__` block when running `python app.py`
+3. Background daemon thread continuously polls Finnhub API → `obtener_precio()`
+4. Price data appended to in-memory `historial` deque (max 1000 entries)
+5. Frontend polls API endpoints every 10 seconds
+6. Forecaster analyzes price history on demand to generate predictions
+
+**CRITICAL**: Thread must start AFTER Gunicorn forks workers, not during module import. Otherwise multiple threads run simultaneously and data collection becomes inconsistent.
 
 ### API Endpoints
 
@@ -66,7 +70,7 @@ python debug_api.py
 python test_app.py
 
 # Production deployment (Render.com with Gunicorn)
-gunicorn app:app
+gunicorn -c gunicorn_config.py app:app
 ```
 
 Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUIA_DEPLOY_RENDER.md) for deployment instructions.
@@ -80,18 +84,27 @@ Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUI
 ## Key Implementation Details
 
 ### Background Monitoring
-- Runs in daemon thread → automatically terminates with main process
+
+**Thread Initialization:**
+- **Production**: Started via `gunicorn_config.py` `post_fork()` hook after worker process fork
+- **Local Dev**: Started in `if __name__ == '__main__'` block when running `python app.py`
+- Runs as daemon thread → automatically terminates with main process
 - No graceful shutdown needed
-- All data lost on restart (no persistence)
+
+**Configuration:**
 - 10-second polling interval = 6 calls/min (well within Finnhub free tier 60/min limit)
-- To change interval: modify `args=(10,)` in thread initialization
-- To change symbol: modify `self.symbol = "GGAL"` in MonitorGGAL.__init__()
+- To change interval: modify `args=(10,)` in `gunicorn_config.py` or `app.py` __main__ block
+- To change symbol: modify `self.symbol = "GGAL"` in `MonitorGGAL.__init__()`
+- All data lost on restart (no persistence)
 
 **CRITICAL for Production (Render.com):**
 - Data stored in-memory in `monitor.historial` deque
-- **MUST use single Gunicorn worker** (`--workers=1`) or data won't be shared between requests
-- Multiple workers = multiple processes = separate memory spaces = requests see empty historial
-- See `Procfile` for correct Gunicorn configuration
+- **MUST use single Gunicorn worker** (`workers=1` in `gunicorn_config.py`)
+- Multiple workers = separate memory spaces = requests see empty historial
+- **Thread MUST start in `post_fork()` hook**, not at module import time
+  - If started at import: parent process starts thread → worker fork → worker also starts thread = 2 threads
+  - Both threads write to same deque causing data inconsistency
+  - See `gunicorn_config.py` for correct implementation
 
 ### Forecasting System (`forecaster.py`)
 
