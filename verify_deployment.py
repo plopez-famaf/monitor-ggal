@@ -79,19 +79,18 @@ def main():
     # Check forecaster.py content
     print("3. Checking forecaster.py Structure:")
     forecaster_checks = check_file_content('forecaster.py', [
+        'class KalmanFilter',
         'class GGALForecaster',
-        'predict_simple_ma',
-        'predict_exponential_smoothing',
-        'predict_linear_regression',
-        'predict_momentum_based',
-        'predict_mean_reversion',
-        'ensemble_forecast',
-        'generate_trading_signal'
+        'def predict(',
+        'def update(',
+        'forecast',
+        'generate_trading_signal',
+        'get_velocity'
     ])
     if forecaster_checks:
-        print("  ✓ forecaster.py has all required methods")
+        print("  ✓ forecaster.py has Kalman Filter implementation")
     else:
-        print("  ✗ forecaster.py is missing methods")
+        print("  ✗ forecaster.py is missing Kalman components")
         all_checks_passed = False
 
     print()
@@ -115,13 +114,14 @@ def main():
     # Check test suite
     print("5. Checking Test Suite:")
     test_checks = check_file_content('test_app.py', [
+        'TestKalmanFilter',
         'TestMonitorGGAL',
         'TestGGALForecaster',
         'TestFlaskAPI',
         'TestIntegration'
     ])
     if test_checks:
-        print("  ✓ test_app.py has all test classes")
+        print("  ✓ test_app.py has all test classes (incl. Kalman tests)")
     else:
         print("  ✗ test_app.py is missing test classes")
         all_checks_passed = False
@@ -132,14 +132,16 @@ def main():
     print("6. Checking Frontend Updates:")
     html_checks = check_file_content('templates/index.html', [
         'GGAL Monitor',
+        'Kalman',
         '/api/forecast',
         '/api/trading-signal',
         'forecast5min',
-        'tradingSignal',
+        'signal_strength',
+        'strength-bar',
         '#0a0e27'  # Dark background color
     ])
     if html_checks:
-        print("  ✓ index.html has forecast UI components")
+        print("  ✓ index.html has Kalman UI with signal strength meter")
     else:
         print("  ✗ index.html is missing UI components")
         all_checks_passed = False
@@ -150,9 +152,9 @@ def main():
     print("7. Checking File Sizes:")
     size_checks = {
         'app.py': (2000, 5000),
-        'forecaster.py': (10000, 20000),
-        'test_app.py': (10000, 20000),
-        'templates/index.html': (10000, 25000)
+        'forecaster.py': (8000, 12000),  # Smaller with Kalman only
+        'test_app.py': (12000, 16000),   # Updated for Kalman tests
+        'templates/index.html': (12000, 16000)  # Simplified without Chart.js
     }
 
     for filepath, (min_size, max_size) in size_checks.items():
@@ -189,8 +191,9 @@ def main():
         ('GET', '/api/historial', 'Price history'),
         ('GET', '/api/estadisticas', 'Statistics'),
         ('GET', '/api/health', 'Health check'),
-        ('GET', '/api/forecast', 'ML price predictions'),
-        ('GET', '/api/trading-signal', 'Trading signal (BUY/SELL/HOLD)')
+        ('GET', '/api/debug', 'Debug info'),
+        ('GET', '/api/forecast', 'Kalman Filter predictions (1/5/10 min)'),
+        ('GET', '/api/trading-signal', 'Trading signal (0-100 strength)')
     ]
     for method, path, desc in endpoints:
         print(f"  • {method:4} {path:25} - {desc}")

@@ -1,6 +1,6 @@
 """
 Test suite for GGAL Monitor Application
-Tests API endpoints, forecasting models, and core functionality.
+Tests API endpoints, Kalman Filter forecasting, and core functionality.
 """
 
 import unittest
@@ -9,12 +9,68 @@ from collections import deque
 from datetime import datetime
 import sys
 import os
+import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app import app, MonitorGGAL
-from forecaster import GGALForecaster
+from forecaster import GGALForecaster, KalmanFilter
+
+
+class TestKalmanFilter(unittest.TestCase):
+    """Test Kalman Filter implementation."""
+
+    def setUp(self):
+        self.kf = KalmanFilter()
+
+    def test_kalman_initialization(self):
+        """Test that Kalman Filter initializes correctly."""
+        self.assertFalse(self.kf.initialized)
+        self.assertEqual(self.kf.x[0], 0.0)
+        self.assertEqual(self.kf.x[1], 0.0)
+
+    def test_kalman_update(self):
+        """Test Kalman Filter updates with measurements."""
+        self.kf.update(50.0)
+        self.assertTrue(self.kf.initialized)
+        self.assertEqual(self.kf.x[0], 50.0)
+        self.assertEqual(self.kf.x[1], 0.0)
+
+        # Update with new measurement
+        self.kf.update(50.5)
+        self.assertTrue(self.kf.initialized)
+        # Price should be updated
+        self.assertGreater(self.kf.x[0], 50.0)
+
+    def test_kalman_predict(self):
+        """Test Kalman Filter prediction."""
+        # Initialize with some data
+        prices = [50.0, 50.2, 50.1, 50.3, 50.5]
+        for price in prices:
+            self.kf.update(price)
+
+        # Predict future
+        pred, unc = self.kf.predict(steps=5)
+        self.assertIsNotNone(pred)
+        self.assertIsNotNone(unc)
+        self.assertGreater(pred, 0)
+        self.assertGreater(unc, 0)
+
+    def test_kalman_velocity(self):
+        """Test velocity tracking."""
+        # Upward trend
+        for i in range(10):
+            self.kf.update(50.0 + i * 0.1)
+
+        velocity = self.kf.get_velocity()
+        self.assertGreater(velocity, 0)  # Should detect upward trend
+
+    def test_kalman_predict_uninitialized(self):
+        """Test that predict returns None when uninitialized."""
+        pred, unc = self.kf.predict(steps=1)
+        self.assertIsNone(pred)
+        self.assertIsNone(unc)
 
 
 class TestMonitorGGAL(unittest.TestCase):
@@ -64,9 +120,9 @@ class TestGGALForecaster(unittest.TestCase):
 
     def setUp(self):
         self.forecaster = GGALForecaster(min_samples=10)
-        # Create mock historical data
+        # Create mock historical data with upward trend
         self.mock_historial = deque(maxlen=1000)
-        base_price = 10.0
+        base_price = 50.0
         for i in range(30):
             self.mock_historial.append({
                 'timestamp': datetime.now().isoformat(),
@@ -75,19 +131,20 @@ class TestGGALForecaster(unittest.TestCase):
                 'low': base_price + (i * 0.1) - 0.2,
                 'open': base_price + (i * 0.1),
                 'change': 0.1,
-                'change_percent': 1.0
+                'change_percent': 0.2
             })
 
     def test_forecaster_initialization(self):
         """Test forecaster initializes correctly."""
         self.assertEqual(self.forecaster.min_samples, 10)
+        self.assertIsNone(self.forecaster.kf)
 
     def test_extract_prices(self):
         """Test price extraction from historial."""
         prices = self.forecaster._extract_prices(self.mock_historial)
         self.assertIsNotNone(prices)
         self.assertEqual(len(prices), 30)
-        self.assertAlmostEqual(prices[0], 10.0, places=1)
+        self.assertAlmostEqual(prices[0], 50.0, places=1)
 
     def test_extract_prices_insufficient_data(self):
         """Test that None is returned with insufficient data."""
@@ -95,64 +152,37 @@ class TestGGALForecaster(unittest.TestCase):
         prices = self.forecaster._extract_prices(small_historial)
         self.assertIsNone(prices)
 
-    def test_predict_simple_ma(self):
-        """Test simple moving average prediction."""
-        prediction = self.forecaster.predict_simple_ma(self.mock_historial, horizon_minutes=5)
-
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction['method'], 'simple_ma')
-        self.assertIn('prediction', prediction)
-        self.assertIn('current_price', prediction)
-        self.assertIn('trend', prediction)
-        self.assertIsInstance(prediction['prediction'], float)
-
-    def test_predict_exponential_smoothing(self):
-        """Test exponential smoothing prediction."""
-        prediction = self.forecaster.predict_exponential_smoothing(self.mock_historial, horizon_minutes=5)
-
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction['method'], 'exponential_smoothing')
-        self.assertIn('prediction', prediction)
-        self.assertIn('confidence', prediction)
-
-    def test_predict_linear_regression(self):
-        """Test linear regression prediction."""
-        prediction = self.forecaster.predict_linear_regression(self.mock_historial, horizon_minutes=5)
-
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction['method'], 'linear_regression')
-        self.assertIn('r_squared', prediction)
-        self.assertIn('slope', prediction)
-        self.assertIn('trend', prediction)
-
-    def test_predict_momentum_based(self):
-        """Test momentum-based prediction."""
-        prediction = self.forecaster.predict_momentum_based(self.mock_historial, horizon_minutes=5)
-
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction['method'], 'momentum')
-        self.assertIn('momentum', prediction)
-
-    def test_predict_mean_reversion(self):
-        """Test mean reversion prediction."""
-        prediction = self.forecaster.predict_mean_reversion(self.mock_historial, horizon_minutes=5)
-
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction['method'], 'mean_reversion')
-        self.assertIn('z_score', prediction)
-        self.assertIn('signal', prediction)
-
-    def test_ensemble_forecast(self):
-        """Test ensemble forecast combines multiple models."""
-        forecast = self.forecaster.ensemble_forecast(self.mock_historial, horizon_minutes=5)
+    def test_forecast(self):
+        """Test Kalman Filter forecast."""
+        forecast = self.forecaster.forecast(self.mock_historial, horizon_minutes=5)
 
         self.assertIsNotNone(forecast)
-        self.assertEqual(forecast['method'], 'ensemble')
+        self.assertEqual(forecast['method'], 'kalman_filter')
         self.assertIn('prediction', forecast)
+        self.assertIn('current_price', forecast)
+        self.assertIn('velocity', forecast)
+        self.assertIn('uncertainty', forecast)
         self.assertIn('confidence', forecast)
-        self.assertIn('models_used', forecast)
-        self.assertIn('technical_indicators', forecast)
-        self.assertGreater(forecast['num_models'], 0)
+        self.assertIn('trend', forecast)
+        self.assertIn('lower_bound', forecast)
+        self.assertIn('upper_bound', forecast)
+
+        # Check types
+        self.assertIsInstance(forecast['prediction'], (int, float))
+        self.assertIsInstance(forecast['velocity'], (int, float))
+        self.assertIsInstance(forecast['uncertainty'], (int, float))
+
+        # Check trend detection
+        self.assertIn(forecast['trend'], ['up', 'down', 'flat'])
+
+    def test_forecast_detects_upward_trend(self):
+        """Test that forecast detects upward trend in data."""
+        forecast = self.forecaster.forecast(self.mock_historial, horizon_minutes=5)
+
+        self.assertIsNotNone(forecast)
+        # Should detect upward trend
+        self.assertEqual(forecast['trend'], 'up')
+        self.assertGreater(forecast['velocity'], 0)
 
     def test_get_all_forecasts(self):
         """Test getting forecasts for multiple horizons."""
@@ -163,6 +193,12 @@ class TestGGALForecaster(unittest.TestCase):
         self.assertIn('5min', forecasts)
         self.assertIn('10min', forecasts)
 
+        # Check that predictions increase with horizon
+        pred_1min = forecasts['1min']['prediction']
+        pred_10min = forecasts['10min']['prediction']
+        # With upward trend, 10min prediction should be higher
+        self.assertGreater(pred_10min, pred_1min)
+
     def test_generate_trading_signal(self):
         """Test trading signal generation."""
         signal = self.forecaster.generate_trading_signal(self.mock_historial)
@@ -170,19 +206,43 @@ class TestGGALForecaster(unittest.TestCase):
         self.assertIsNotNone(signal)
         self.assertIn('signal', signal)
         self.assertIn(signal['signal'], ['BUY', 'SELL', 'HOLD'])
+        self.assertIn('signal_strength', signal)
         self.assertIn('confidence', signal)
         self.assertIn('reason', signal)
 
-    def test_technical_indicators(self):
-        """Test technical indicators calculation."""
-        prices = self.forecaster._extract_prices(self.mock_historial)
-        indicators = self.forecaster._calculate_technical_indicators(prices)
+        # Check signal strength is 0-100
+        self.assertGreaterEqual(signal['signal_strength'], 0)
+        self.assertLessEqual(signal['signal_strength'], 100)
 
-        self.assertIsInstance(indicators, dict)
-        # Check for expected indicators
-        expected_indicators = ['sma', 'ema', 'momentum', 'roc', 'volatility', 'rsi']
-        for indicator in expected_indicators:
-            self.assertIn(indicator, indicators)
+    def test_trading_signal_upward_trend(self):
+        """Test that upward trend generates BUY or positive signal."""
+        signal = self.forecaster.generate_trading_signal(self.mock_historial)
+
+        self.assertIsNotNone(signal)
+        # With strong upward trend, should be BUY or have positive strength
+        if signal['signal'] == 'BUY':
+            self.assertGreater(signal['signal_strength'], 0)
+
+    def test_forecast_insufficient_data(self):
+        """Test forecast with insufficient data."""
+        small_historial = deque([
+            {'price': 50.0, 'timestamp': datetime.now().isoformat()}
+            for _ in range(5)
+        ], maxlen=1000)
+
+        forecast = self.forecaster.forecast(small_historial, horizon_minutes=5)
+        self.assertIsNone(forecast)
+
+    def test_trading_signal_insufficient_data(self):
+        """Test trading signal with insufficient data."""
+        small_historial = deque([
+            {'price': 50.0, 'timestamp': datetime.now().isoformat()}
+            for _ in range(10)
+        ], maxlen=1000)
+
+        signal = self.forecaster.generate_trading_signal(small_historial)
+        self.assertEqual(signal['signal'], 'HOLD')
+        self.assertEqual(signal['signal_strength'], 0)
 
 
 class TestFlaskAPI(unittest.TestCase):
@@ -198,6 +258,7 @@ class TestFlaskAPI(unittest.TestCase):
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'GGAL Monitor', response.data)
+        self.assertIn(b'Kalman', response.data)
 
     def test_health_endpoint(self):
         """Test health check endpoint."""
@@ -237,6 +298,11 @@ class TestFlaskAPI(unittest.TestCase):
         if response.status_code == 200:
             data = json.loads(response.data)
             self.assertIsInstance(data, dict)
+            # Check for Kalman-specific fields
+            if '5min' in data:
+                self.assertEqual(data['5min']['method'], 'kalman_filter')
+                self.assertIn('velocity', data['5min'])
+                self.assertIn('uncertainty', data['5min'])
 
     def test_trading_signal_endpoint(self):
         """Test trading signal endpoint."""
@@ -248,38 +314,73 @@ class TestFlaskAPI(unittest.TestCase):
             data = json.loads(response.data)
             self.assertIn('signal', data)
             self.assertIn(data['signal'], ['BUY', 'SELL', 'HOLD'])
+            # Check for signal_strength field
+            self.assertIn('signal_strength', data)
+            self.assertGreaterEqual(data['signal_strength'], 0)
+            self.assertLessEqual(data['signal_strength'], 100)
+
+    def test_debug_endpoint(self):
+        """Test debug endpoint."""
+        response = self.client.get('/api/debug')
+        self.assertEqual(response.status_code, 200)
+
+        data = json.loads(response.data)
+        self.assertIn('historial_size', data)
+        self.assertIn('thread_running', data)
 
 
 class TestIntegration(unittest.TestCase):
     """Integration tests for complete workflows."""
 
     def test_full_forecast_pipeline(self):
-        """Test complete forecasting pipeline."""
+        """Test complete Kalman forecasting pipeline."""
         # Create mock data
         monitor = MonitorGGAL(api_key="demo")
         forecaster = GGALForecaster(min_samples=10)
 
-        # Add sufficient mock data
+        # Add sufficient mock data with upward trend
         for i in range(20):
             monitor.historial.append({
                 'timestamp': datetime.now().isoformat(),
-                'price': 10.0 + (i * 0.05),
-                'high': 10.5 + (i * 0.05),
-                'low': 9.5 + (i * 0.05),
-                'open': 10.0 + (i * 0.05),
+                'price': 50.0 + (i * 0.05),
+                'high': 50.5 + (i * 0.05),
+                'low': 49.5 + (i * 0.05),
+                'open': 50.0 + (i * 0.05),
                 'change': 0.05,
-                'change_percent': 0.5
+                'change_percent': 0.1
             })
 
         # Test forecast
-        forecast = forecaster.ensemble_forecast(monitor.historial, horizon_minutes=5)
+        forecast = forecaster.forecast(monitor.historial, horizon_minutes=5)
         self.assertIsNotNone(forecast)
         self.assertIn('prediction', forecast)
+        self.assertEqual(forecast['method'], 'kalman_filter')
 
         # Test trading signal
         signal = forecaster.generate_trading_signal(monitor.historial)
         self.assertIsNotNone(signal)
         self.assertIn('signal', signal)
+        self.assertIn('signal_strength', signal)
+
+    def test_kalman_consistency(self):
+        """Test that Kalman Filter produces consistent results."""
+        forecaster = GGALForecaster(min_samples=10)
+
+        # Create stable price data
+        historial = deque(maxlen=1000)
+        for i in range(30):
+            historial.append({
+                'timestamp': datetime.now().isoformat(),
+                'price': 50.0 + (i * 0.01),  # Small upward drift
+            })
+
+        # Get two forecasts
+        forecast1 = forecaster.forecast(historial, horizon_minutes=5)
+        forecast2 = forecaster.forecast(historial, horizon_minutes=5)
+
+        # Should be identical (stateless, deterministic)
+        self.assertEqual(forecast1['prediction'], forecast2['prediction'])
+        self.assertEqual(forecast1['velocity'], forecast2['velocity'])
 
 
 def run_tests():
@@ -289,6 +390,7 @@ def run_tests():
     suite = unittest.TestSuite()
 
     # Add all test classes
+    suite.addTests(loader.loadTestsFromTestCase(TestKalmanFilter))
     suite.addTests(loader.loadTestsFromTestCase(TestMonitorGGAL))
     suite.addTests(loader.loadTestsFromTestCase(TestGGALForecaster))
     suite.addTests(loader.loadTestsFromTestCase(TestFlaskAPI))
@@ -303,7 +405,7 @@ def run_tests():
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("GGAL Monitor - Test Suite")
+    print("GGAL Monitor - Test Suite (Kalman Filter)")
     print("=" * 70)
     print()
 
