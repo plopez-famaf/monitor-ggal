@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Flask-based web application that monitors the real-time stock price of GGAL (Banco Galicia ADR) using the Finnhub API. The application provides a dashboard with live price updates, historical charts, and statistics.
+Flask-based web application that monitors real-time stock price of GGAL (Banco Galicia ADR) using the Finnhub API. Features live price updates, historical charts, statistics, and ML-based price forecasting for short-term trading signals.
+
+See [README.md](README.md) for user-facing documentation.
 
 ## Architecture
 
@@ -12,169 +14,163 @@ This is a Flask-based web application that monitors the real-time stock price of
 
 **Backend (`app.py`)**
 - Flask web server with REST API endpoints
-- `MonitorGGAL` class: Background monitoring service that polls Finnhub API every 10 seconds
-- Uses a daemon thread to continuously fetch price data in the background
-- Stores up to 1000 price points in a `deque` for efficient memory management
-- All price data is stored in-memory (no persistent database)
+- `MonitorGGAL` class: Background daemon thread that polls Finnhub API every 10 seconds
+- In-memory storage: `deque(maxlen=1000)` for price history (no database persistence)
+- `GGALForecaster` class: Ensemble ML forecasting for 1/5/10-minute predictions
 
 **Frontend (`templates/index.html`)**
-- Single-page application with vanilla JavaScript
-- Chart.js for price visualization
-- Auto-refreshes every 10 seconds via `/api/*` endpoints
-- Responsive design with gradient UI
+- Single-page vanilla JavaScript app with Chart.js visualization
+- Auto-refreshes every 10 seconds via API polling
+- Dark theme UI with real-time updates
 
 ### Data Flow
 
-1. On startup, `MonitorGGAL` launches a background daemon thread
-2. Thread polls Finnhub API every 10 seconds via `obtener_precio()`
-3. Price data is appended to `historial` deque (max 1000 entries)
-4. Frontend polls Flask API endpoints every 10 seconds
-5. API returns latest data from in-memory `historial`
+1. Background daemon thread continuously polls Finnhub API → `obtener_precio()`
+2. Price data appended to in-memory `historial` deque (max 1000 entries)
+3. Frontend polls API endpoints every 10 seconds
+4. Forecaster analyzes price history on demand to generate predictions
 
 ### API Endpoints
 
-**Core Endpoints:**
-- `GET /` - Serves the dashboard HTML
-- `GET /api/precio-actual` - Returns most recent price point
-- `GET /api/historial` - Returns all stored price history (up to 1000 points)
-- `GET /api/estadisticas` - Returns computed statistics (max, min, average)
-- `GET /api/health` - Health check endpoint
-
-**ML/Forecasting Endpoints:**
-- `GET /api/forecast` - Returns ensemble price predictions for 1, 5, and 10 minute horizons
-- `GET /api/trading-signal` - Returns AI-generated trading signal (BUY/SELL/HOLD) with reasoning
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Dashboard HTML |
+| `GET /api/precio-actual` | Latest price point |
+| `GET /api/historial` | All price history (up to 1000 points) |
+| `GET /api/estadisticas` | Statistics (max, min, avg) |
+| `GET /api/health` | Health check |
+| `GET /api/forecast` | Ensemble predictions (1/5/10 min horizons) |
+| `GET /api/trading-signal` | Trading signal (BUY/SELL/HOLD) with reasoning |
 
 ## Environment Configuration
 
-**Required:**
-- `FINNHUB_API_KEY` - Finnhub API key for stock data (falls back to "demo" if not set)
-- `PORT` - Server port (defaults to 5000)
-
-Get a free Finnhub API key at: https://finnhub.io
+- `FINNHUB_API_KEY` - **REQUIRED** Finnhub API key for stock data. Get free key at: https://finnhub.io
+  - Note: The "demo" token is no longer valid and will return 401 Unauthorized
+  - App will start but return no data without valid API key
+- `PORT` - Server port (defaults to 5001)
 
 ## Development Commands
-
-### Local Development
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Set API key (required for real data)
+# Run with API key (REQUIRED)
 export FINNHUB_API_KEY="your_api_key_here"
-
-# Run development server
 python app.py
 
-# Run tests
+# Debug API connection
+python debug_api.py
+
+# Run comprehensive test suite (30+ test cases)
 python test_app.py
-```
 
-Server runs on http://localhost:5000
-
-### Testing
-
-Run the comprehensive test suite before deployment:
-```bash
-python test_app.py
-```
-
-Tests cover:
-- MonitorGGAL class functionality
-- All forecasting models (MA, ES, LR, momentum, mean reversion)
-- Ensemble forecasting
-- Technical indicators
-- All API endpoints
-- Integration workflows
-
-### Production (Render.com)
-
-The app is deployed on Render using Gunicorn:
-
-```bash
-# Start command configured in Render
+# Production deployment (Render.com with Gunicorn)
 gunicorn app:app
 ```
+
+Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUIA_DEPLOY_RENDER.md) for deployment instructions.
+
+**Important:**
+- ⚠️ Without valid `FINNHUB_API_KEY`, app will show warning but **NO DATA will be collected**
+- The "demo" token no longer works (returns 401 Unauthorized)
+- Use `debug_api.py` script to verify API connection
+- Status 202 responses mean data is still being collected (need ~10-15 data points)
 
 ## Key Implementation Details
 
 ### Background Monitoring
-
-The `monitorear_background()` method runs in a daemon thread, which means:
-- Thread automatically terminates when main process exits
+- Runs in daemon thread → automatically terminates with main process
 - No graceful shutdown needed
-- Data is lost on restart (in-memory only)
+- All data lost on restart (no persistence)
+- 10-second polling interval = 6 calls/min (well within Finnhub free tier 60/min limit)
+- To change interval: modify `args=(10,)` in thread initialization
+- To change symbol: modify `self.symbol = "GGAL"` in MonitorGGAL.__init__()
 
-### Rate Limiting
-
-Finnhub free tier allows 60 API calls/minute. Current configuration:
-- 10-second intervals = 6 calls/minute (well within limits)
-- Modify interval in line 68 of `app.py`: `args=(10,)` changes the seconds
-
-### Symbol Modification
-
-To monitor a different stock, change line 14 in `app.py`:
-```python
-self.symbol = "GGAL"  # Change to any valid Finnhub symbol
-```
+**CRITICAL for Production (Render.com):**
+- Data stored in-memory in `monitor.historial` deque
+- **MUST use single Gunicorn worker** (`--workers=1`) or data won't be shared between requests
+- Multiple workers = multiple processes = separate memory spaces = requests see empty historial
+- See `Procfile` for correct Gunicorn configuration
 
 ### Forecasting System (`forecaster.py`)
 
-The forecasting module implements an **ensemble approach** combining 5 models:
+**Ensemble Approach** - Combines 5 statistical models:
+1. Simple Moving Average (short/long MA crossover)
+2. Exponential Smoothing (Holt-Winters triple ES)
+3. Linear Regression (fits trend to recent 20 points)
+4. Momentum-based (projects recent momentum)
+5. Mean Reversion (statistical reversion to mean)
 
-1. **Simple Moving Average** - Fast baseline using short/long MA crossover
-2. **Exponential Smoothing** - Triple ES (Holt-Winters style) for trend detection
-3. **Linear Regression** - Fits linear trend to recent 20 data points
-4. **Momentum-based** - Projects recent price momentum forward
-5. **Mean Reversion** - Assumes prices revert to recent mean (anti-momentum)
-
-**Ensemble Method:**
-- All models predict independently
-- Final prediction = median of all predictions (robust to outliers)
-- Confidence based on prediction spread (low spread = high confidence)
-- Requires minimum 10 data points (15 for trading signals)
+**Ensemble Logic:**
+- Final prediction = median of all model predictions (robust to outliers)
+- Confidence = based on prediction spread (low spread = high confidence)
+- Requires min 10 data points (15 for trading signals)
 
 **Technical Indicators:**
-- SMA, EMA (5-period moving averages)
+- SMA/EMA (5-period moving averages)
 - Momentum & ROC (Rate of Change)
-- Volatility (standard deviation of returns)
-- RSI (Relative Strength Index, 14-period)
+- Volatility (std dev of returns)
+- RSI (14-period Relative Strength Index)
 
 **Trading Signal Logic:**
-- BUY: Predicted rise > 0.5% OR RSI < 30 (oversold)
-- SELL: Predicted drop > 0.5% OR RSI > 70 (overbought)
-- HOLD: Low confidence or conflicting signals
-- Momentum check prevents counter-trend signals
+- **BUY**: Predicted rise > 0.5% OR RSI < 30 (oversold)
+- **SELL**: Predicted drop > 0.5% OR RSI > 70 (overbought)
+- **HOLD**: Low confidence or conflicting signals; momentum check prevents counter-trend signals
 
 **Design Philosophy:**
-- Lightweight: Only numpy dependency, no heavy ML libraries
-- Fast: All predictions complete in <100ms
-- Stateless: No model training/persistence needed
-- HFT-style: Minute-level predictions suitable for short-term trading
+- Lightweight (numpy only, no TensorFlow/sklearn)
+- Fast (<100ms predictions)
+- Stateless (no training/persistence)
+- HFT-style minute-level predictions (1/5/10 min horizons)
 
-## Deployment Notes
+## Troubleshooting
 
-This app is designed for Render.com free tier deployment:
-- Free tier suspends after 15 minutes of inactivity
-- Use UptimeRobot or similar to ping `/api/health` every 5 minutes to keep alive
-- See `GUIA_DEPLOY_RENDER.md` for complete deployment instructions
+**App shows warning but no data appears:**
+1. **MOST COMMON**: Missing or invalid API key
+   - Run: `python debug_api.py` to diagnose
+   - Verify: `echo $FINNHUB_API_KEY` shows your key
+   - Test API directly: `curl "https://finnhub.io/api/v1/quote?symbol=GGAL&token=YOUR_KEY"`
+   - Demo token no longer works (401 error)
 
-## Limitations
+2. **"GET /api/precio-actual HTTP/1.1 202" responses:**
+   - Normal on startup - app needs time to collect data
+   - Wait 10-30 seconds for first data to appear
+   - If persists beyond 1 minute, check API key
 
-- **No persistence**: All data is in-memory and lost on restart
-- **Single symbol**: Only monitors one stock at a time (GGAL)
-- **No authentication**: API endpoints are publicly accessible
-- **Fixed history size**: Limited to last 1000 data points
-- **No error recovery**: If Finnhub API is down, returns None and continues polling
-- **Short-term predictions only**: Models designed for 1-10 minute horizons, not long-term
-- **No model retraining**: Uses fixed statistical methods, no adaptive learning
-- **Market hours**: Finnhub data only updates during market hours (US stock market)
+3. **Forecasting endpoints returning 202:**
+   - `/api/forecast` needs minimum 10 data points (~2 minutes of monitoring)
+   - `/api/trading-signal` needs minimum 15 data points (~3 minutes)
+   - Check browser console or `curl` the endpoint to see exact error message
 
-## Forecasting Performance
+4. **No price updates / stuck data:**
+   - Check if market is open (US market hours: Mon-Fri 9:30 AM - 4:00 PM ET)
+   - Outside market hours, prices stay frozen at last close
+   - Background thread logs to console: look for "Error obteniendo precio" messages
+   - Verify rate limit: API returns header `X-Ratelimit-Remaining`
 
-Expect forecasting accuracy to:
-- **Work best**: During high-volume trading hours with consistent trends
-- **Work poorly**: During market open/close volatility, news events, low volume
-- **Typical accuracy**: 60-70% directional accuracy on 5-minute horizon in stable conditions
+5. **Port already in use:**
+   - Default port is 5001 in [app.py:124](app.py)
+   - Override with: `PORT=8000 python app.py`
 
-The ensemble approach provides robustness but predictions should be treated as **probabilistic estimates**, not guarantees. Always validate with actual market conditions.
+## Limitations & Considerations
+
+**System Limitations:**
+- No persistence (all data in-memory, lost on restart)
+- Single symbol monitoring only
+- No authentication on API endpoints
+- Fixed history (max 1000 data points)
+- No graceful API error recovery (returns None, continues polling)
+
+**Forecasting Limitations:**
+- Short-term only (1-10 min horizons, not for long-term)
+- No adaptive learning (fixed statistical methods)
+- Market hours only (US stock market hours)
+- 60-70% directional accuracy in stable conditions
+- Works best: high-volume trending markets
+- Works poorly: market open/close volatility, news events, low volume
+
+**Deployment Notes:**
+- Designed for Render.com free tier (suspends after 15 min inactivity)
+- Use UptimeRobot to ping `/api/health` every 5 min to keep alive
+- Predictions are probabilistic estimates, not financial advice

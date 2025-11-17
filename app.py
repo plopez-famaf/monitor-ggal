@@ -27,8 +27,15 @@ class MonitorGGAL:
                 timeout=5
             )
             data = response.json()
-            
-            if "c" in data:
+
+            # Check for API errors
+            if "error" in data:
+                print(f"❌ Finnhub API Error: {data['error']}")
+                if response.status_code == 401:
+                    print(f"   → API key inválida. Configura: export FINNHUB_API_KEY='tu_key'")
+                return None
+
+            if "c" in data and data["c"] > 0:
                 return {
                     "timestamp": datetime.now().isoformat(),
                     "price": data.get("c", 0),
@@ -38,6 +45,10 @@ class MonitorGGAL:
                     "change": round(data.get("c", 0) - data.get("pc", 0), 2),
                     "change_percent": round((data.get("c", 0) - data.get("pc", 0)) / data.get("pc", 1) * 100, 2)
                 }
+            elif "c" in data and data["c"] == 0:
+                print(f"⚠️  Precio = 0 (mercado cerrado o símbolo no disponible)")
+                return None
+
         except Exception as e:
             print(f"Error obteniendo precio: {e}")
         return None
@@ -58,7 +69,19 @@ class MonitorGGAL:
 # Obtener API key desde variable de entorno
 api_key = os.environ.get('FINNHUB_API_KEY')
 if not api_key:
-    print("ADVERTENCIA: FINNHUB_API_KEY no está configurada")
+    print("=" * 60)
+    print("⚠️  ADVERTENCIA: FINNHUB_API_KEY no está configurada")
+    print("=" * 60)
+    print("La app se iniciará pero NO OBTENDRÁ DATOS.")
+    print("El token 'demo' ya no funciona (401 Unauthorized).")
+    print()
+    print("Para obtener datos reales:")
+    print("  1. Registra una API key gratis en: https://finnhub.io")
+    print("  2. Configura la variable: export FINNHUB_API_KEY='tu_key'")
+    print("  3. Reinicia la app: python app.py")
+    print()
+    print("Para diagnosticar: python debug_api.py")
+    print("=" * 60)
     api_key = "demo"
 
 monitor = MonitorGGAL(api_key=api_key)
@@ -101,6 +124,41 @@ def estadisticas():
 @app.route('/api/health')
 def health():
     return jsonify({"status": "ok", "symbol": "GGAL"})
+
+@app.route('/api/debug')
+def debug():
+    """Debug endpoint to check API configuration and connection status."""
+    api_key_configured = os.environ.get('FINNHUB_API_KEY') is not None
+    api_key_length = len(monitor.api_key) if monitor.api_key else 0
+    is_demo = monitor.api_key == "demo"
+
+    # Try to get current price to test connection
+    test_response = None
+    try:
+        response = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={"symbol": "GGAL", "token": monitor.api_key},
+            timeout=5
+        )
+        test_response = {
+            "status_code": response.status_code,
+            "has_error": "error" in response.json(),
+            "error_message": response.json().get("error", None) if "error" in response.json() else None,
+            "has_price": "c" in response.json(),
+            "price": response.json().get("c", None) if "c" in response.json() else None
+        }
+    except Exception as e:
+        test_response = {"error": str(e)}
+
+    return jsonify({
+        "api_key_configured": api_key_configured,
+        "api_key_is_demo": is_demo,
+        "api_key_length": api_key_length,
+        "historial_size": len(monitor.historial),
+        "thread_running": monitor.running,
+        "test_connection": test_response,
+        "instructions": "Configure FINNHUB_API_KEY environment variable in Render dashboard" if is_demo else "API key is configured"
+    })
 
 @app.route('/api/forecast')
 def forecast():
