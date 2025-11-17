@@ -163,10 +163,13 @@ def debug():
         test_response = {"error": str(e)}
 
     return jsonify({
+        "process_id": os.getpid(),
+        "parent_process_id": os.getppid(),
         "api_key_configured": api_key_configured,
         "api_key_is_demo": is_demo,
         "api_key_length": api_key_length,
         "historial_size": len(monitor.historial),
+        "historial_max_size": monitor.historial.maxlen,
         "thread_running": monitor.running,
         "test_connection": test_response,
         "instructions": "Configure FINNHUB_API_KEY environment variable in Render dashboard" if is_demo else "API key is configured"
