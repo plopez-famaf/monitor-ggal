@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from collections import deque
 import os
+from forecaster import GGALForecaster
 
 app = Flask(__name__)
 
@@ -61,6 +62,7 @@ if not api_key:
     api_key = "demo"
 
 monitor = MonitorGGAL(api_key=api_key)
+forecaster = GGALForecaster(min_samples=10)
 
 # Iniciar monitoreo en background thread
 thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
@@ -100,6 +102,24 @@ def estadisticas():
 def health():
     return jsonify({"status": "ok", "symbol": "GGAL"})
 
+@app.route('/api/forecast')
+def forecast():
+    """Get price forecast for next 1, 5, and 10 minutes."""
+    if len(monitor.historial) < 10:
+        return jsonify({"error": "Insufficient data", "message": "Need at least 10 data points"}), 202
+
+    forecasts = forecaster.get_all_forecasts(monitor.historial, horizons=[1, 5, 10])
+    return jsonify(forecasts)
+
+@app.route('/api/trading-signal')
+def trading_signal():
+    """Get AI-generated trading signal (BUY/SELL/HOLD)."""
+    if len(monitor.historial) < 15:
+        return jsonify({"error": "Insufficient data", "message": "Need at least 15 data points"}), 202
+
+    signal = forecaster.generate_trading_signal(monitor.historial)
+    return jsonify(signal)
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     app.run(debug=False, host='0.0.0.0', port=port)
