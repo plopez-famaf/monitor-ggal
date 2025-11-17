@@ -3,15 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitor GGAL - Banco Galicia</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <title>Monitor GGAL - Kalman Filter</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: #0a0e27;
@@ -19,31 +18,38 @@
             padding: 20px;
             color: #e0e0e0;
         }
-        
+
         .container {
-            max-width: 1200px;
+            max-width: 900px;
             margin: 0 auto;
         }
-        
+
         h1 {
             color: #f5f5f5;
             text-align: center;
-            margin-bottom: 30px;
-            font-size: 2em;
+            margin-bottom: 10px;
+            font-size: 2.2em;
             font-weight: 600;
             letter-spacing: -0.5px;
         }
-        
+
+        .subtitle {
+            text-align: center;
+            color: #6c7a89;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
-        
+
         .card {
             background: #16213e;
-            padding: 20px;
+            padding: 25px;
             border-radius: 8px;
             border: 1px solid #1f2d4d;
             transition: all 0.2s;
@@ -53,24 +59,24 @@
             border-color: #2a3f6a;
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
-        
+
         .card h2 {
             color: #a8b2d1;
             margin-bottom: 15px;
-            font-size: 0.9em;
+            font-size: 0.85em;
             font-weight: 500;
             text-transform: uppercase;
             letter-spacing: 1px;
             opacity: 0.8;
         }
-        
+
         .precio-actual {
-            font-size: 2.5em;
+            font-size: 3em;
             font-weight: 600;
             color: #64ffda;
             margin: 15px 0;
         }
-        
+
         .cambio {
             font-size: 1.1em;
             margin: 10px 0;
@@ -84,20 +90,20 @@
         .cambio.negativo {
             color: #fc5c65;
         }
-        
+
         .timestamp {
-            font-size: 0.85em;
+            font-size: 0.8em;
             color: #6c7a89;
             margin-top: 10px;
         }
-        
+
         .stats {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-top: 20px;
+            gap: 12px;
+            margin-top: 15px;
         }
-        
+
         .stat-item {
             background: #0f1b30;
             padding: 12px;
@@ -107,33 +113,27 @@
         }
 
         .stat-label {
-            font-size: 0.75em;
+            font-size: 0.7em;
             color: #6c7a89;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
         .stat-value {
-            font-size: 1.3em;
+            font-size: 1.2em;
             font-weight: 600;
             color: #e0e0e0;
-            margin-top: 8px;
+            margin-top: 6px;
         }
-        
+
         .full-width {
             grid-column: 1 / -1;
         }
-        
-        .chart-container {
-            position: relative;
-            height: 350px;
-            margin-top: 20px;
-        }
-        
+
         .loading {
             text-align: center;
             color: #6c7a89;
-            font-size: 1em;
+            font-size: 0.9em;
             padding: 15px;
         }
 
@@ -145,7 +145,7 @@
             margin-bottom: 20px;
             border: 1px solid #4a2828;
         }
-        
+
         .status-indicator {
             display: inline-block;
             width: 8px;
@@ -161,6 +161,72 @@
             50% { opacity: 0.3; }
         }
 
+        /* Signal strength meter */
+        .signal-strength {
+            margin: 20px 0;
+        }
+
+        .strength-label {
+            font-size: 0.85em;
+            color: #a8b2d1;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .strength-bar {
+            width: 100%;
+            height: 30px;
+            background: #0f1b30;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 1px solid #1a2942;
+            position: relative;
+        }
+
+        .strength-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #fc5c65 0%, #fed330 50%, #26de81 100%);
+            transition: width 0.5s ease;
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 12px;
+            font-weight: 600;
+            font-size: 0.9em;
+            color: #0a0e27;
+        }
+
+        .forecast-details {
+            background: #0f1b30;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border: 1px solid #1a2942;
+        }
+
+        .forecast-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #1a2942;
+            font-size: 0.85em;
+        }
+
+        .forecast-row:last-child {
+            border-bottom: none;
+        }
+
+        .forecast-label {
+            color: #6c7a89;
+        }
+
+        .forecast-value {
+            color: #e0e0e0;
+            font-weight: 600;
+        }
+
         .info {
             background: #1a2942;
             color: #8a95a7;
@@ -169,17 +235,18 @@
             margin-top: 20px;
             font-size: 0.85em;
             border: 1px solid #243652;
+            text-align: center;
         }
-        
+
         @media (max-width: 768px) {
             h1 {
                 font-size: 1.8em;
             }
-            
+
             .precio-actual {
-                font-size: 2em;
+                font-size: 2.2em;
             }
-            
+
             .grid {
                 grid-template-columns: 1fr;
             }
@@ -189,10 +256,12 @@
 <body>
     <div class="container">
         <h1>GGAL Monitor</h1>
-        
+        <div class="subtitle">Kalman Filter Forecasting</div>
+
         <div id="error-container"></div>
-        
+
         <div class="grid">
+            <!-- Current Price -->
             <div class="card">
                 <h2><span class="status-indicator"></span>Precio Actual</h2>
                 <div class="precio-actual" id="precioActual">
@@ -201,7 +270,8 @@
                 <div class="cambio" id="cambio">--</div>
                 <div class="timestamp" id="timestamp">--</div>
             </div>
-            
+
+            <!-- Statistics -->
             <div class="card">
                 <h2>Estadísticas</h2>
                 <div class="stats">
@@ -224,90 +294,106 @@
                 </div>
             </div>
 
-            <div class="card">
-                <h2>Predicción (5 min)</h2>
-                <div class="precio-actual" id="forecast5min" style="font-size: 2em; color: #b794f6;">
+            <!-- Forecast Card -->
+            <div class="card full-width">
+                <h2>Predicción Kalman (5 minutos)</h2>
+                <div class="precio-actual" id="forecast5min" style="font-size: 2.5em; color: #b794f6;">
                     <span class="loading">Cargando...</span>
                 </div>
                 <div class="cambio" id="forecastChange">--</div>
-                <div class="timestamp" id="forecastConfidence" style="font-size: 0.85em;">--</div>
+
+                <div class="forecast-details" id="forecastDetails" style="display: none;">
+                    <div class="forecast-row">
+                        <span class="forecast-label">Velocidad:</span>
+                        <span class="forecast-value" id="velocity">--</span>
+                    </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Incertidumbre:</span>
+                        <span class="forecast-value" id="uncertainty">--</span>
+                    </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Intervalo 95%:</span>
+                        <span class="forecast-value" id="confidenceInterval">--</span>
+                    </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Tendencia:</span>
+                        <span class="forecast-value" id="trend">--</span>
+                    </div>
+                </div>
             </div>
 
-            <div class="card">
-                <h2>Trading Signal</h2>
-                <div id="tradingSignal" style="font-size: 2em; font-weight: 600; margin: 15px 0;">
+            <!-- Trading Signal -->
+            <div class="card full-width">
+                <h2>Señal de Trading</h2>
+                <div id="tradingSignal" style="font-size: 2.5em; font-weight: 600; margin: 15px 0; text-align: center;">
                     <span class="loading">Esperando...</span>
                 </div>
-                <div id="signalReason" style="color: #8a95a7; font-size: 0.85em;">--</div>
-            </div>
-            
-            <div class="card full-width">
-                <h2>Gráfico de Precios</h2>
-                <div class="chart-container">
-                    <canvas id="grafico"></canvas>
+
+                <div class="signal-strength" id="signalStrengthContainer" style="display: none;">
+                    <div class="strength-label">
+                        <span>Fuerza de la señal</span>
+                        <span id="strengthValue">--</span>
+                    </div>
+                    <div class="strength-bar">
+                        <div class="strength-fill" id="strengthFill" style="width: 0%;">
+                            <span id="strengthText"></span>
+                        </div>
+                    </div>
                 </div>
+
+                <div id="signalReason" style="color: #8a95a7; font-size: 0.9em; margin-top: 15px; text-align: center;">--</div>
             </div>
-            
+
             <div class="info full-width">
-                Data updates every 10s via Finnhub API. ML predictions use ensemble forecasting. Educational purposes only.
+                Kalman Filter: Optimal state estimation for real-time predictions.
+                Updates every 10s. Educational purposes only.
             </div>
         </div>
     </div>
 
     <script>
-        let chart = null;
         let ultimaActualizacion = 0;
-        
+
         async function actualizarDatos() {
             try {
                 // Precio actual
                 const respPrecio = await fetch('/api/precio-actual');
-                
+
                 if (respPrecio.status === 202) {
-                    // Esperando datos
-                    document.getElementById('precioActual').innerHTML = '<span class="loading">Esperando datos iniciales...</span>';
+                    document.getElementById('precioActual').innerHTML = '<span class="loading">Esperando datos...</span>';
                     return;
                 }
-                
+
                 if (!respPrecio.ok) throw new Error('Error al obtener precio');
-                
+
                 const precio = await respPrecio.json();
-                
+
                 // Limpiar error si existía
                 document.getElementById('error-container').innerHTML = '';
-                
+
                 // Actualizar precio actual
                 document.getElementById('precioActual').textContent = `$${precio.price.toFixed(2)}`;
-                
+
                 // Actualizar cambio
                 const cambioVal = precio.change;
                 const cambioPct = precio.change_percent;
                 const cambioEl = document.getElementById('cambio');
                 cambioEl.textContent = `${cambioVal > 0 ? '↗' : '↘'} ${Math.abs(cambioVal).toFixed(2)} (${cambioVal > 0 ? '+' : ''}${cambioPct.toFixed(2)}%)`;
                 cambioEl.className = cambioVal > 0 ? 'cambio positivo' : 'cambio negativo';
-                
+
                 // Actualizar timestamp
                 const fecha = new Date(precio.timestamp);
                 document.getElementById('timestamp').textContent = `Actualizado: ${fecha.toLocaleTimeString('es-AR')}`;
-                
+
                 // Estadísticas
                 const respStats = await fetch('/api/estadisticas');
                 if (respStats.ok) {
                     const stats = await respStats.json();
-                    
+
                     document.getElementById('maximo').textContent = `$${stats.max.toFixed(2)}`;
                     document.getElementById('minimo').textContent = `$${stats.min.toFixed(2)}`;
                     document.getElementById('promedio').textContent = `$${stats.promedio.toFixed(2)}`;
                     document.getElementById('muestras').textContent = stats.muestras;
-                }
-                
-                // Historial para gráfico
-                const respHistorial = await fetch('/api/historial');
-                if (respHistorial.ok) {
-                    const historial = await respHistorial.json();
-                    if (historial.length > 0) {
-                        actualizarGrafico(historial);
-                    }
                 }
 
                 // Forecast
@@ -318,17 +404,22 @@
                         const pred = forecast['5min'];
                         document.getElementById('forecast5min').textContent = `$${pred.prediction.toFixed(2)}`;
 
-                        const change = pred.prediction - pred.current_price;
-                        const changePct = (change / pred.current_price * 100).toFixed(2);
+                        const change = pred.price_change;
+                        const changePct = pred.price_change_pct;
                         const changeEl = document.getElementById('forecastChange');
-                        changeEl.textContent = `${change > 0 ? '↗' : '↘'} ${Math.abs(change).toFixed(2)} (${change > 0 ? '+' : ''}${changePct}%)`;
+                        changeEl.textContent = `${change > 0 ? '↗' : '↘'} ${Math.abs(change).toFixed(2)} (${change > 0 ? '+' : ''}${changePct.toFixed(2)}%)`;
                         changeEl.className = change > 0 ? 'cambio positivo' : 'cambio negativo';
 
-                        document.getElementById('forecastConfidence').textContent =
-                            `Confianza: ${pred.confidence} | ${pred.num_models} modelos`;
+                        // Show forecast details
+                        document.getElementById('forecastDetails').style.display = 'block';
+                        document.getElementById('velocity').textContent = pred.velocity.toFixed(4) + ' $/min';
+                        document.getElementById('uncertainty').textContent = pred.uncertainty.toFixed(3);
+                        document.getElementById('confidenceInterval').textContent =
+                            `$${pred.lower_bound.toFixed(2)} - $${pred.upper_bound.toFixed(2)}`;
+                        document.getElementById('trend').textContent = pred.trend.toUpperCase();
                     }
                 } else if (respForecast.status === 202) {
-                    document.getElementById('forecast5min').innerHTML = '<span class="loading" style="font-size: 0.6em;">Esperando datos...</span>';
+                    document.getElementById('forecast5min').innerHTML = '<span class="loading" style="font-size: 0.7em;">Esperando datos...</span>';
                 }
 
                 // Trading Signal
@@ -344,93 +435,22 @@
                     signalEl.textContent = signal.signal;
                     signalEl.style.color = signalColors[signal.signal];
                     document.getElementById('signalReason').textContent = signal.reason;
+
+                    // Update signal strength meter
+                    if (signal.signal_strength !== undefined) {
+                        document.getElementById('signalStrengthContainer').style.display = 'block';
+                        document.getElementById('strengthValue').textContent = signal.signal_strength + '/100';
+                        document.getElementById('strengthFill').style.width = signal.signal_strength + '%';
+                        document.getElementById('strengthText').textContent = signal.signal_strength;
+                    }
                 } else if (respSignal.status === 202) {
-                    document.getElementById('tradingSignal').innerHTML = '<span class="loading" style="font-size: 0.6em;">Esperando datos...</span>';
+                    document.getElementById('tradingSignal').innerHTML = '<span class="loading" style="font-size: 0.7em;">Esperando datos...</span>';
                 }
 
             } catch (error) {
                 console.error('Error:', error);
                 const errorDiv = document.getElementById('error-container');
                 errorDiv.innerHTML = `<div class="error">⚠️ Error: ${error.message}</div>`;
-            }
-        }
-
-        function actualizarGrafico(datos) {
-            const ctx = document.getElementById('grafico').getContext('2d');
-            const labels = datos.map(d => {
-                const fecha = new Date(d.timestamp);
-                return fecha.toLocaleTimeString('es-AR', { 
-                    hour: '2-digit', 
-                    minute: '2-digit',
-                    second: '2-digit'
-                });
-            });
-            const precios = datos.map(d => d.price);
-            
-            if (chart) {
-                chart.data.labels = labels;
-                chart.data.datasets[0].data = precios;
-                chart.update('none');
-            } else {
-                chart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'GGAL Price (USD)',
-                            data: precios,
-                            borderColor: '#64ffda',
-                            backgroundColor: 'rgba(100, 255, 218, 0.1)',
-                            borderWidth: 2,
-                            tension: 0.3,
-                            fill: true,
-                            pointRadius: 2,
-                            pointBackgroundColor: '#64ffda',
-                            pointBorderColor: '#0a0e27',
-                            pointBorderWidth: 1,
-                            pointHoverRadius: 4
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            },
-                            tooltip: {
-                                backgroundColor: '#16213e',
-                                borderColor: '#2a3f6a',
-                                borderWidth: 1,
-                                padding: 12,
-                                titleFont: { size: 12 },
-                                bodyFont: { size: 11 },
-                                titleColor: '#a8b2d1',
-                                bodyColor: '#e0e0e0',
-                                callbacks: {
-                                    label: function(context) {
-                                        return `$${context.parsed.y.toFixed(2)}`;
-                                    }
-                                }
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: false,
-                                grid: { color: '#1a2942', lineWidth: 0.5 },
-                                ticks: {
-                                    color: '#6c7a89',
-                                    font: { size: 10 },
-                                    callback: function(value) { return '$' + value.toFixed(2); }
-                                }
-                            },
-                            x: {
-                                grid: { color: '#1a2942', lineWidth: 0.5 },
-                                ticks: { color: '#6c7a89', font: { size: 9 } }
-                            }
-                        }
-                    }
-                });
             }
         }
 

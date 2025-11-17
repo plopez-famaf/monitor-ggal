@@ -2,14 +2,136 @@ import numpy as np
 from datetime import datetime
 
 
+class KalmanFilter:
+    """
+    Kalman Filter for real-time price prediction.
+
+    State vector: [price, velocity]
+    - price: current price estimate
+    - velocity: rate of price change ($/timestep)
+
+    The filter optimally combines:
+    1. Predictions from the motion model (physics)
+    2. Noisy measurements (actual prices)
+    """
+
+    def __init__(self, process_noise=0.01, measurement_noise=0.1):
+        """
+        Initialize Kalman Filter.
+
+        Args:
+            process_noise: How much the model can deviate (Q matrix)
+            measurement_noise: How noisy are price measurements (R)
+        """
+        # State: [price, velocity]
+        self.x = np.array([0.0, 0.0])
+
+        # Covariance matrix (uncertainty)
+        self.P = np.eye(2) * 1000  # High initial uncertainty
+
+        # State transition matrix (how state evolves)
+        # price(t+1) = price(t) + velocity(t)
+        # velocity(t+1) = velocity(t)
+        self.F = np.array([
+            [1, 1],  # price += velocity
+            [0, 1]   # velocity unchanged
+        ])
+
+        # Measurement matrix (we only observe price, not velocity)
+        self.H = np.array([[1, 0]])
+
+        # Process noise covariance
+        self.Q = np.eye(2) * process_noise
+
+        # Measurement noise covariance
+        self.R = measurement_noise
+
+        self.initialized = False
+
+    def update(self, measurement):
+        """
+        Update filter with new price measurement.
+
+        This is the Kalman filter cycle:
+        1. Predict next state
+        2. Compute Kalman gain
+        3. Update state with measurement
+        """
+        if not self.initialized:
+            # Initialize with first measurement
+            self.x[0] = measurement
+            self.x[1] = 0.0
+            self.initialized = True
+            return
+
+        # 1. PREDICT STEP
+        # Project state ahead
+        x_pred = self.F @ self.x
+
+        # Project covariance ahead
+        P_pred = self.F @ self.P @ self.F.T + self.Q
+
+        # 2. UPDATE STEP
+        # Innovation (measurement residual)
+        y = measurement - (self.H @ x_pred)[0]
+
+        # Innovation covariance
+        S = (self.H @ P_pred @ self.H.T)[0, 0] + self.R
+
+        # Kalman gain (how much to trust measurement vs prediction)
+        K = (P_pred @ self.H.T) / S
+
+        # Update state estimate
+        self.x = x_pred + K.flatten() * y
+
+        # Update covariance estimate
+        I_KH = np.eye(2) - np.outer(K, self.H)
+        self.P = I_KH @ P_pred
+
+    def predict(self, steps=1):
+        """
+        Predict future price 'steps' timesteps ahead.
+
+        Args:
+            steps: Number of timesteps to predict forward
+
+        Returns:
+            predicted_price, uncertainty
+        """
+        if not self.initialized:
+            return None, None
+
+        # Project state forward
+        x_pred = self.x.copy()
+        P_pred = self.P.copy()
+
+        for _ in range(steps):
+            x_pred = self.F @ x_pred
+            P_pred = self.F @ P_pred @ self.F.T + self.Q
+
+        predicted_price = x_pred[0]
+        uncertainty = np.sqrt(P_pred[0, 0])  # Standard deviation
+
+        return predicted_price, uncertainty
+
+    def get_velocity(self):
+        """Get current estimated velocity (rate of change)."""
+        return self.x[1] if self.initialized else 0.0
+
+    def get_state(self):
+        """Get full state [price, velocity]."""
+        return self.x.copy() if self.initialized else None
+
+
 class GGALForecaster:
     """
-    Lightweight short-term forecasting for GGAL stock prices.
-    Basic statistical models suitable for minute-level predictions.
+    Simplified forecaster using only Kalman Filter.
+    Optimal for real-time noisy time series.
     """
 
     def __init__(self, min_samples=10):
         self.min_samples = min_samples
+        self.kf = None
 
     def _extract_prices(self, historial):
         """Extract price array from historial deque."""
@@ -17,302 +139,86 @@ class GGALForecaster:
             return None
         return np.array([p['price'] for p in historial])
 
-    def _calculate_returns(self, prices):
-        """Calculate log returns."""
-        return np.diff(np.log(prices))
+    def _initialize_filter(self, prices):
+        """Initialize and train Kalman filter with historical data."""
+        self.kf = KalmanFilter(process_noise=0.01, measurement_noise=0.1)
 
-    def _calculate_technical_indicators(self, prices, window=5):
-        """Calculate technical indicators for feature engineering."""
-        indicators = {}
+        # Feed all historical prices to the filter
+        for price in prices:
+            self.kf.update(price)
 
-        # Moving averages
-        if len(prices) >= window:
-            indicators['sma'] = np.mean(prices[-window:])
-            indicators['ema'] = self._exponential_moving_average(prices, window)
-
-        # Momentum
-        if len(prices) >= window:
-            indicators['momentum'] = prices[-1] - prices[-window]
-            indicators['roc'] = (prices[-1] - prices[-window]) / prices[-window] * 100
-
-        # Volatility (standard deviation of returns)
-        if len(prices) >= window:
-            returns = self._calculate_returns(prices[-window:])
-            indicators['volatility'] = np.std(returns)
-
-        # RSI (Relative Strength Index)
-        if len(prices) >= 14:
-            indicators['rsi'] = self._calculate_rsi(prices, period=14)
-
-        return indicators
-
-    def _exponential_moving_average(self, prices, window):
-        """Calculate EMA."""
-        alpha = 2 / (window + 1)
-        ema = prices[0]
-        for price in prices[1:]:
-            ema = alpha * price + (1 - alpha) * ema
-        return ema
-
-    def _calculate_rsi(self, prices, period=14):
-        """Calculate Relative Strength Index."""
-        deltas = np.diff(prices)
-        gains = deltas.copy()
-        losses = deltas.copy()
-        gains[gains < 0] = 0
-        losses[losses > 0] = 0
-        losses = np.abs(losses)
-
-        avg_gain = np.mean(gains[-period:])
-        avg_loss = np.mean(losses[-period:])
-
-        if avg_loss == 0:
-            return 100
-
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-
-    def predict_simple_ma(self, historial, horizon_minutes=5):
+    def forecast(self, historial, horizon_minutes=5):
         """
-        Simple Moving Average forecast.
-        Fast and lightweight, good baseline for HFT.
+        Generate forecast using Kalman Filter.
+
+        Args:
+            historial: Price history deque
+            horizon_minutes: How many minutes to predict ahead
+
+        Returns:
+            dict with prediction, confidence, and metadata
         """
         prices = self._extract_prices(historial)
         if prices is None:
             return None
 
-        # Use different MA windows
-        short_window = min(5, len(prices))
-        long_window = min(10, len(prices))
+        # Initialize/reinitialize filter with latest data
+        self._initialize_filter(prices)
 
-        short_ma = np.mean(prices[-short_window:])
-        long_ma = np.mean(prices[-long_window:])
+        # Predict forward
+        predicted_price, uncertainty = self.kf.predict(steps=horizon_minutes)
 
-        # Trend detection
-        trend = short_ma - long_ma
-
-        # Simple forecast: current price + trend
-        prediction = prices[-1] + trend
-
-        return {
-            'method': 'simple_ma',
-            'prediction': round(prediction, 2),
-            'current_price': round(prices[-1], 2),
-            'horizon_minutes': horizon_minutes,
-            'confidence': 'low',  # MA is simple, lower confidence
-            'trend': 'up' if trend > 0 else 'down'
-        }
-
-    def predict_exponential_smoothing(self, historial, horizon_minutes=5, alpha=0.3):
-        """
-        Exponential Smoothing forecast.
-        Gives more weight to recent observations.
-        """
-        prices = self._extract_prices(historial)
-        if prices is None:
+        if predicted_price is None:
             return None
-
-        # Triple exponential smoothing (Holt-Winters style)
-        level = prices[0]
-        trend = 0
-
-        for price in prices[1:]:
-            last_level = level
-            level = alpha * price + (1 - alpha) * (level + trend)
-            trend = alpha * (level - last_level) + (1 - alpha) * trend
-
-        # Forecast
-        prediction = level + trend * horizon_minutes
-
-        return {
-            'method': 'exponential_smoothing',
-            'prediction': round(prediction, 2),
-            'current_price': round(prices[-1], 2),
-            'horizon_minutes': horizon_minutes,
-            'confidence': 'medium',
-            'trend_strength': round(abs(trend), 4)
-        }
-
-    def predict_linear_regression(self, historial, horizon_minutes=5):
-        """
-        Simple linear regression on recent price movements.
-        Captures short-term linear trends.
-        """
-        prices = self._extract_prices(historial)
-        if prices is None:
-            return None
-
-        # Use recent window for regression
-        window = min(20, len(prices))
-        recent_prices = prices[-window:]
-
-        # Time index
-        X = np.arange(len(recent_prices))
-
-        # Manual linear regression (avoid scipy dependency)
-        n = len(X)
-        x_mean = np.mean(X)
-        y_mean = np.mean(recent_prices)
-
-        numerator = np.sum((X - x_mean) * (recent_prices - y_mean))
-        denominator = np.sum((X - x_mean) ** 2)
-
-        slope = numerator / denominator if denominator != 0 else 0
-        intercept = y_mean - slope * x_mean
-
-        # Predict future
-        future_time = len(recent_prices) + horizon_minutes
-        prediction = slope * future_time + intercept
-
-        # Simple R-squared
-        y_pred = slope * X + intercept
-        ss_res = np.sum((recent_prices - y_pred) ** 2)
-        ss_tot = np.sum((recent_prices - y_mean) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-
-        confidence = 'high' if r_squared > 0.7 else 'medium' if r_squared > 0.4 else 'low'
-
-        return {
-            'method': 'linear_regression',
-            'prediction': round(prediction, 2),
-            'current_price': round(prices[-1], 2),
-            'horizon_minutes': horizon_minutes,
-            'confidence': confidence,
-            'r_squared': round(r_squared, 3),
-            'slope': round(slope, 4),
-            'trend': 'up' if slope > 0 else 'down'
-        }
-
-    def predict_momentum_based(self, historial, horizon_minutes=5):
-        """
-        Momentum-based prediction.
-        Assumes recent momentum continues.
-        """
-        prices = self._extract_prices(historial)
-        if prices is None:
-            return None
-
-        # Calculate momentum over different windows
-        short_momentum = prices[-1] - prices[-min(3, len(prices))]
-        med_momentum = prices[-1] - prices[-min(5, len(prices))]
-        long_momentum = prices[-1] - prices[-min(10, len(prices))]
-
-        # Weighted average of momentums
-        avg_momentum = (short_momentum * 0.5 + med_momentum * 0.3 + long_momentum * 0.2)
-
-        # Project momentum forward
-        prediction = prices[-1] + avg_momentum * (horizon_minutes / 5)
-
-        return {
-            'method': 'momentum',
-            'prediction': round(prediction, 2),
-            'current_price': round(prices[-1], 2),
-            'horizon_minutes': horizon_minutes,
-            'momentum': round(avg_momentum, 4),
-            'confidence': 'medium'
-        }
-
-    def predict_mean_reversion(self, historial, horizon_minutes=5):
-        """
-        Mean reversion strategy.
-        Assumes price will revert to recent mean.
-        """
-        prices = self._extract_prices(historial)
-        if prices is None:
-            return None
-
-        # Calculate mean and std
-        window = min(20, len(prices))
-        recent_prices = prices[-window:]
-        mean_price = np.mean(recent_prices)
-        std_price = np.std(recent_prices)
 
         current_price = prices[-1]
+        price_change = predicted_price - current_price
+        price_change_pct = (price_change / current_price) * 100
 
-        # Z-score
-        z_score = (current_price - mean_price) / std_price if std_price > 0 else 0
+        # Confidence based on uncertainty
+        # Lower uncertainty = higher confidence
+        if uncertainty < 0.1:
+            confidence = 'high'
+        elif uncertainty < 0.3:
+            confidence = 'medium'
+        else:
+            confidence = 'low'
 
-        # Reversion prediction: move towards mean
-        reversion_strength = 0.3  # How much to revert
-        prediction = current_price + (mean_price - current_price) * reversion_strength
+        # Velocity (rate of change)
+        velocity = self.kf.get_velocity()
 
         return {
-            'method': 'mean_reversion',
-            'prediction': round(prediction, 2),
+            'method': 'kalman_filter',
+            'prediction': round(predicted_price, 2),
             'current_price': round(current_price, 2),
-            'mean_price': round(mean_price, 2),
-            'z_score': round(z_score, 2),
-            'horizon_minutes': horizon_minutes,
-            'confidence': 'medium',
-            'signal': 'overbought' if z_score > 1 else 'oversold' if z_score < -1 else 'neutral'
-        }
-
-    def ensemble_forecast(self, historial, horizon_minutes=5):
-        """
-        Ensemble of multiple models for robust prediction.
-        Combines predictions from all models.
-        """
-        prices = self._extract_prices(historial)
-        if prices is None:
-            return None
-
-        predictions = []
-        methods_used = []
-
-        # Get all predictions
-        models = [
-            self.predict_simple_ma,
-            self.predict_exponential_smoothing,
-            self.predict_linear_regression,
-            self.predict_momentum_based,
-            self.predict_mean_reversion
-        ]
-
-        for model in models:
-            try:
-                pred = model(historial, horizon_minutes)
-                if pred:
-                    predictions.append(pred['prediction'])
-                    methods_used.append(pred['method'])
-            except Exception as e:
-                print(f"Error in {model.__name__}: {e}")
-
-        if not predictions:
-            return None
-
-        # Ensemble: median (more robust than mean)
-        ensemble_pred = np.median(predictions)
-
-        # Calculate disagreement (spread) as confidence measure
-        spread = np.std(predictions)
-        confidence = 'high' if spread < 0.1 else 'medium' if spread < 0.3 else 'low'
-
-        # Technical indicators
-        indicators = self._calculate_technical_indicators(prices)
-
-        return {
-            'method': 'ensemble',
-            'prediction': round(ensemble_pred, 2),
-            'current_price': round(prices[-1], 2),
+            'price_change': round(price_change, 2),
+            'price_change_pct': round(price_change_pct, 2),
             'horizon_minutes': horizon_minutes,
             'confidence': confidence,
-            'prediction_spread': round(spread, 3),
-            'models_used': methods_used,
-            'num_models': len(predictions),
-            'min_prediction': round(min(predictions), 2),
-            'max_prediction': round(max(predictions), 2),
-            'technical_indicators': indicators,
+            'uncertainty': round(uncertainty, 3),
+            'velocity': round(velocity, 4),
+            'trend': 'up' if velocity > 0 else 'down' if velocity < 0 else 'flat',
+            'lower_bound': round(predicted_price - 2 * uncertainty, 2),
+            'upper_bound': round(predicted_price + 2 * uncertainty, 2),
+            'confidence_interval': '95%',
             'timestamp': datetime.now().isoformat()
         }
 
     def get_all_forecasts(self, historial, horizons=[1, 5, 10]):
         """
-        Get ensemble forecasts for multiple time horizons.
+        Get forecasts for multiple time horizons.
+
+        Args:
+            historial: Price history
+            horizons: List of minutes to forecast ahead
+
+        Returns:
+            dict of forecasts keyed by horizon
         """
         forecasts = {}
+
         for horizon in horizons:
-            forecast = self.ensemble_forecast(historial, horizon_minutes=horizon)
+            forecast = self.forecast(historial, horizon_minutes=horizon)
             if forecast:
                 forecasts[f'{horizon}min'] = forecast
 
@@ -320,61 +226,71 @@ class GGALForecaster:
 
     def generate_trading_signal(self, historial):
         """
-        Generate trading signal based on forecasts and indicators.
-        Returns: 'BUY', 'SELL', or 'HOLD'
+        Generate trading signal based on Kalman prediction.
+
+        Signal logic:
+        - BUY: Predicted rise > 0.3% with medium/high confidence
+        - SELL: Predicted drop > 0.3% with medium/high confidence
+        - HOLD: Otherwise
+
+        Returns:
+            dict with signal, confidence score (0-100), and reasoning
         """
         prices = self._extract_prices(historial)
         if prices is None or len(prices) < 15:
-            return {'signal': 'HOLD', 'reason': 'Insufficient data', 'confidence': 'low'}
+            return {
+                'signal': 'HOLD',
+                'signal_strength': 0,
+                'reason': 'Insufficient data',
+                'confidence': 'low'
+            }
 
-        # Get short-term forecast
-        forecast = self.ensemble_forecast(historial, horizon_minutes=5)
+        # Get 5-minute forecast
+        forecast = self.forecast(historial, horizon_minutes=5)
         if not forecast:
-            return {'signal': 'HOLD', 'reason': 'Forecast unavailable', 'confidence': 'low'}
+            return {
+                'signal': 'HOLD',
+                'signal_strength': 0,
+                'reason': 'Forecast unavailable',
+                'confidence': 'low'
+            }
 
-        current_price = forecast['current_price']
-        predicted_price = forecast['prediction']
-        price_change_pct = ((predicted_price - current_price) / current_price) * 100
+        price_change_pct = forecast['price_change_pct']
+        velocity = forecast['velocity']
+        uncertainty = forecast['uncertainty']
 
-        # Get technical indicators
-        indicators = forecast['technical_indicators']
+        # Calculate signal strength (0-100)
+        # Based on: magnitude of change, velocity, and inverse of uncertainty
+        strength_from_change = min(abs(price_change_pct) * 20, 50)  # Max 50 from price change
+        strength_from_velocity = min(abs(velocity) * 100, 30)         # Max 30 from velocity
+        strength_from_confidence = max(0, 20 - uncertainty * 50)     # Max 20 from low uncertainty
 
-        # Decision logic
-        signal = 'HOLD'
-        reason = []
+        signal_strength = int(strength_from_change + strength_from_velocity + strength_from_confidence)
+        signal_strength = min(signal_strength, 100)  # Cap at 100
 
-        # Price prediction signal
-        if price_change_pct > 0.5:  # Expected to rise > 0.5%
+        # Determine signal
+        if price_change_pct > 0.3 and forecast['confidence'] in ['medium', 'high']:
             signal = 'BUY'
-            reason.append(f'Predicted rise: {price_change_pct:.2f}%')
-        elif price_change_pct < -0.5:  # Expected to fall > 0.5%
+            reason = f'Kalman predicts +{price_change_pct:.2f}% rise in 5min'
+        elif price_change_pct < -0.3 and forecast['confidence'] in ['medium', 'high']:
             signal = 'SELL'
-            reason.append(f'Predicted drop: {price_change_pct:.2f}%')
-
-        # RSI signal
-        if 'rsi' in indicators:
-            if indicators['rsi'] < 30:
-                signal = 'BUY' if signal != 'SELL' else signal
-                reason.append(f'RSI oversold: {indicators["rsi"]:.1f}')
-            elif indicators['rsi'] > 70:
-                signal = 'SELL' if signal != 'BUY' else signal
-                reason.append(f'RSI overbought: {indicators["rsi"]:.1f}')
-
-        # Momentum confirmation
-        if 'momentum' in indicators:
-            if signal == 'BUY' and indicators['momentum'] < 0:
-                signal = 'HOLD'
-                reason.append('Negative momentum - holding')
-            elif signal == 'SELL' and indicators['momentum'] > 0:
-                signal = 'HOLD'
-                reason.append('Positive momentum - holding')
+            reason = f'Kalman predicts {price_change_pct:.2f}% drop in 5min'
+        else:
+            signal = 'HOLD'
+            if abs(price_change_pct) < 0.3:
+                reason = f'Low expected movement ({price_change_pct:+.2f}%)'
+            else:
+                reason = f'Low confidence (uncertainty: {uncertainty:.2f})'
 
         return {
             'signal': signal,
+            'signal_strength': signal_strength,
             'confidence': forecast['confidence'],
-            'reason': '; '.join(reason) if reason else 'No clear signal',
+            'reason': reason,
             'price_change_forecast': round(price_change_pct, 2),
-            'current_price': current_price,
-            'predicted_price': predicted_price,
+            'current_price': forecast['current_price'],
+            'predicted_price': forecast['prediction'],
+            'velocity': round(velocity, 4),
+            'uncertainty': round(uncertainty, 3),
             'timestamp': datetime.now().isoformat()
         }
