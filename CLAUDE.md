@@ -108,34 +108,39 @@ Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUI
 
 ### Forecasting System (`forecaster.py`)
 
-**Ensemble Approach** - Combines 5 statistical models:
-1. Simple Moving Average (short/long MA crossover)
-2. Exponential Smoothing (Holt-Winters triple ES)
-3. Linear Regression (fits trend to recent 20 points)
-4. Momentum-based (projects recent momentum)
-5. Mean Reversion (statistical reversion to mean)
+**Single Model: Kalman Filter**
+- Optimal state estimation for real-time noisy time series
+- State vector: [price, velocity] where velocity = $/timestep
+- Mathematically proven to minimize mean squared error (under Gaussian assumptions)
+- Used in production systems: GPS navigation, autopilot, rocket guidance
 
-**Ensemble Logic:**
-- Final prediction = median of all model predictions (robust to outliers)
-- Confidence = based on prediction spread (low spread = high confidence)
-- Requires min 10 data points (15 for trading signals)
+**How it works:**
+1. Predict: Projects state forward using motion model
+2. Update: Corrects prediction with new measurement
+3. Optimal: Balances prediction vs measurement based on uncertainties
+4. Recursive: Updates incrementally, no full history recomputation needed
 
-**Technical Indicators:**
-- SMA/EMA (5-period moving averages)
-- Momentum & ROC (Rate of Change)
-- Volatility (std dev of returns)
-- RSI (14-period Relative Strength Index)
+**Key Outputs:**
+- Price prediction with 95% confidence interval
+- Velocity (rate of price change)
+- Uncertainty quantification (standard deviation)
+- Trend direction (up/down/flat based on velocity)
 
-**Trading Signal Logic:**
-- **BUY**: Predicted rise > 0.5% OR RSI < 30 (oversold)
-- **SELL**: Predicted drop > 0.5% OR RSI > 70 (overbought)
-- **HOLD**: Low confidence or conflicting signals; momentum check prevents counter-trend signals
+**Trading Signal:**
+- **Signal strength**: 0-100 numeric score (not just BUY/SELL/HOLD)
+- Calculated from:
+  * Price change magnitude (max 50 points)
+  * Velocity strength (max 30 points)
+  * Low uncertainty (max 20 points)
+- **BUY**: Predicted rise > 0.3% with medium/high confidence
+- **SELL**: Predicted drop > 0.3% with medium/high confidence
+- **HOLD**: Low expected movement or high uncertainty
 
 **Design Philosophy:**
-- Lightweight (numpy only, no TensorFlow/sklearn)
-- Fast (<100ms predictions)
-- Stateless (no training/persistence)
-- HFT-style minute-level predictions (1/5/10 min horizons)
+- Lightweight (numpy only, ~150 lines)
+- Fast (<50ms per prediction)
+- Stateless (reinitializes filter each call with full history)
+- Theoretically optimal (Kalman = maximum likelihood estimator)
 
 ## Troubleshooting
 
@@ -176,12 +181,13 @@ Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUI
 - No graceful API error recovery (returns None, continues polling)
 
 **Forecasting Limitations:**
-- Short-term only (1-10 min horizons, not for long-term)
-- No adaptive learning (fixed statistical methods)
-- Market hours only (US stock market hours)
-- 60-70% directional accuracy in stable conditions
-- Works best: high-volume trending markets
-- Works poorly: market open/close volatility, news events, low volume
+- Short-term only (1-10 min horizons, not for long-term trends)
+- Assumes Gaussian noise (Kalman optimal under this assumption)
+- Assumes constant velocity model (price changes linearly)
+- No adaptive learning (reinitializes filter each prediction)
+- Market hours only (data updates during US trading hours)
+- Works best: stable markets with gradual trends
+- Works poorly: sudden news events, market gaps, high volatility periods
 
 **Deployment Notes:**
 - Designed for Render.com free tier (suspends after 15 min inactivity)

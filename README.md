@@ -9,11 +9,11 @@ Real-time stock price monitoring for GGAL (Banco Galicia ADR) with machine learn
 ## Features
 
 - 📈 **Real-time Price Monitoring** - Live GGAL stock price updates every 10 seconds
-- 🤖 **ML Price Forecasting** - Ensemble of 5 statistical models for 1/5/10-minute predictions
-- 📊 **Trading Signals** - BUY/SELL/HOLD recommendations based on technical indicators
-- 📉 **Historical Charts** - Interactive Chart.js visualization
-- 🎨 **Dark Theme UI** - Modern, minimalistic interface
-- ⚡ **Lightweight** - No heavy ML libraries, only numpy
+- 🔬 **Kalman Filter Forecasting** - Optimal state estimation for 1/5/10-minute predictions
+- 📊 **Numeric Trading Signals** - 0-100 signal strength (not just BUY/SELL/HOLD)
+- 📉 **Confidence Intervals** - 95% prediction bounds with uncertainty quantification
+- 🎨 **Dark Theme UI** - Clean, minimalistic interface focused on predictions
+- ⚡ **Lightweight** - Only numpy, no ML frameworks
 
 ## Quick Start
 
@@ -70,24 +70,22 @@ python debug_api.py
 - Stores up to 1000 price points in-memory
 - No database persistence (data lost on restart)
 
-### ML Forecasting
-Ensemble of 5 statistical models:
-1. **Simple Moving Average** - Baseline trend detection
-2. **Exponential Smoothing** - Weighted recent data
-3. **Linear Regression** - Linear trend fitting
-4. **Momentum** - Price momentum projection
-5. **Mean Reversion** - Statistical reversion
+### Kalman Filter Forecasting
+Optimal state estimation for noisy time series:
+- **State vector**: [price, velocity]
+- **Prediction**: Price forecast with 95% confidence interval
+- **Uncertainty**: Automatic quantification of prediction confidence
+- **Velocity**: Rate of price change ($/timestep)
+- **Mathematically optimal**: Minimizes mean squared error
 
-**Technical Indicators:**
-- RSI (Relative Strength Index)
-- Moving Averages (SMA/EMA)
-- Momentum & Rate of Change
-- Volatility
+Used in production systems like GPS, autopilot, and rocket guidance.
 
 ### Trading Signals
-- **BUY**: Predicted rise > 0.5% OR RSI < 30 (oversold)
-- **SELL**: Predicted drop > 0.5% OR RSI > 70 (overbought)
-- **HOLD**: Low confidence or conflicting signals
+- **Signal strength**: 0-100 numeric score
+- Calculated from price change, velocity, and uncertainty
+- **BUY**: Predicted rise > 0.3% with medium/high confidence
+- **SELL**: Predicted drop > 0.3% with medium/high confidence
+- **HOLD**: Low expected movement or high uncertainty
 
 ## Testing
 
@@ -98,8 +96,8 @@ python test_app.py
 ```
 
 Tests cover:
-- All forecasting models
-- Technical indicators
+- Kalman Filter implementation
+- Forecast accuracy and uncertainty
 - API endpoints
 - Integration workflows
 
@@ -159,12 +157,13 @@ Quick deploy:
 - **Single symbol** - Only monitors GGAL
 - **No authentication** - Public API endpoints
 - **Short-term predictions** - 1-10 min horizons only
+- **Gaussian assumption** - Kalman assumes normally distributed noise
+- **Constant velocity model** - Works best for gradual trends
 - **Market hours** - Data only updates during US trading hours
-- **Accuracy** - 60-70% directional accuracy in stable conditions
 
 ## Performance
 
-- **Prediction speed**: <100ms per forecast
+- **Prediction speed**: <50ms per forecast (Kalman is faster than ensemble)
 - **Memory usage**: ~10KB per 1000 data points
 - **API rate limit**: 60 calls/min (free tier)
 - **Current usage**: 6 calls/min (10-second intervals)
@@ -188,8 +187,8 @@ monitor-ggal/
 ## Technologies
 
 - **Backend**: Flask 3.0, Python 3.8+
-- **ML**: NumPy 1.26+ (statistical models)
-- **Frontend**: Vanilla JavaScript, Chart.js
+- **Forecasting**: NumPy 1.26+ (Kalman Filter)
+- **Frontend**: Vanilla JavaScript (no external libraries)
 - **API**: Finnhub Stock API
 - **Deployment**: Gunicorn, Render.com
 
@@ -197,11 +196,11 @@ monitor-ggal/
 
 ⚠️ **Educational purposes only. Not financial advice.**
 
-The forecasting models provide probabilistic estimates and should not be used as the sole basis for trading decisions. Always:
+The Kalman Filter provides probabilistic estimates with uncertainty quantification, but should not be used as the sole basis for trading decisions. Always:
 - Validate with multiple sources
 - Use proper risk management
 - Consult financial professionals
-- Understand market conditions
+- Understand that Kalman assumes Gaussian noise and constant velocity
 
 ## License
 
