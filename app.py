@@ -5,7 +5,12 @@ import time
 from datetime import datetime
 from collections import deque
 import os
+import sys
 from forecaster import GGALForecaster
+
+# Force unbuffered output for immediate logging visibility
+import functools
+print = functools.partial(print, flush=True)
 
 app = Flask(__name__)
 
