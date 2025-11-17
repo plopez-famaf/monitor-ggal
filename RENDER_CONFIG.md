@@ -1,54 +1,89 @@
-# Configuración de Variables de Entorno en Render.com
+# Configuración Completa de Render.com
 
-## Problema Actual
+## Problemas Actuales
 
-Tu app en Render está devolviendo status 202 constantemente porque **no tiene configurada la variable de entorno FINNHUB_API_KEY**.
+Tu app en Render tiene 2 problemas:
 
-El thread background está corriendo pero falla silenciosamente porque usa el token "demo" que ya no funciona (401 Unauthorized).
+1. **Gunicorn con múltiples workers** - No usa el Procfile, crea workers separados
+2. **Puede faltar FINNHUB_API_KEY** - Verifica que esté configurada
 
-## Solución: Configurar Variable de Entorno
+### ¿Por qué múltiples workers es un problema?
 
-### Paso 1: Acceder al Dashboard de Render
+El background thread colecta datos en UN worker, pero los requests HTTP van a OTROS workers que tienen `historial` vacío. Necesitas forzar `--workers=1`.
+
+## Solución: Configurar Render Correctamente
+
+### Paso 1: Acceder al Dashboard
 
 1. Ve a: https://dashboard.render.com
 2. Encuentra tu servicio "monitor-ggal"
 3. Click en el nombre del servicio
 
-### Paso 2: Agregar Variable de Entorno
+### Paso 2: Configurar Start Command (CRÍTICO)
 
-1. En el menú lateral izquierdo, click en **"Environment"**
-2. Busca la sección **"Environment Variables"**
-3. Click en **"Add Environment Variable"**
+1. En el menú lateral, click en **"Settings"**
+2. Busca la sección **"Build & Deploy"**
+3. Encuentra el campo **"Start Command"**
+4. **Cambia** de `gunicorn app:app` a:
+   ```
+   gunicorn --workers=1 --threads=2 --timeout=120 app:app
+   ```
+5. Click **"Save Changes"**
 
-### Paso 3: Configurar la Variable
+**IMPORTANTE:** Esto sobrescribe el Procfile. Render no usa Procfile automáticamente para Web Services.
 
-Agrega:
-- **Key**: `FINNHUB_API_KEY`
-- **Value**: `d4db3o9r01qovljouiq0d4db3o9r01qovljouiqg`
+### Paso 3: Configurar Variable de Entorno
 
-### Paso 4: Guardar y Re-desplegar
+1. En el menú lateral, click en **"Environment"**
+2. Busca **"Environment Variables"**
+3. Verifica que existe `FINNHUB_API_KEY`
+4. Si NO existe, click **"Add Environment Variable"**:
+   - **Key**: `FINNHUB_API_KEY`
+   - **Value**: `d4db3o9r01qovljouiq0d4db3o9r01qovljouiqg`
+5. Click **"Save Changes"**
 
-1. Click en **"Save Changes"** (botón verde)
-2. Render automáticamente re-desplegará tu app
-3. Espera 1-2 minutos para que complete el re-despliegue
+### Paso 4: Re-desplegar Manualmente
+
+1. Ve a la pestaña **"Manual Deploy"** (arriba)
+2. Click **"Deploy latest commit"**
+3. Espera 2-3 minutos para el re-despliegue
 
 ### Paso 5: Verificar que Funciona
 
-Después del re-despliegue, verifica:
+Después del re-despliegue, verifica en los **Logs**:
+
+**Deberías ver:**
+```
+[INFO] Starting gunicorn 21.2.0
+[INFO] Listening at: http://0.0.0.0:10000
+[INFO] Using worker: sync
+[INFO] Booting worker with pid: XX        ← SOLO UN worker
+Iniciando monitoreo de GGAL...
+[timestamp] Precio: $XX.XX                ← Precios apareciendo
+[timestamp] Precio: $XX.XX
+```
+
+**NO deberías ver:**
+```
+[INFO] Booting worker with pid: 65
+[INFO] Booting worker with pid: 66        ← Múltiples workers = MAL
+```
+
+**Luego prueba los endpoints:**
 
 ```bash
-# 1. Verificar configuración (nuevo endpoint de debug)
+# 1. Debug endpoint - verifica configuración
 curl https://monitor-ggal.onrender.com/api/debug | python -m json.tool
 
-# Deberías ver:
-# "api_key_configured": true,
-# "api_key_is_demo": false,
-# "test_connection": { "has_price": true, ... }
+# Debe mostrar:
+# "historial_size": > 0           ← Número mayor a cero
+# "api_key_is_demo": false
+# "test_connection": {"has_price": true}
 
-# 2. Esperar 30 segundos y verificar que hay datos
-curl https://monitor-ggal.onrender.com/api/estadisticas | python -m json.tool
+# 2. Precio actual - espera 30-60 segundos después del deploy
+curl https://monitor-ggal.onrender.com/api/precio-actual | python -m json.tool
 
-# Deberías ver precios en vez de {"error": "Sin datos"}
+# Debe mostrar precio en vez de status 202
 ```
 
 ## Captura de Pantalla de Referencia
