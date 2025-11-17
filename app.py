@@ -100,8 +100,13 @@ monitor = MonitorGGAL(api_key=api_key)
 forecaster = GGALForecaster(min_samples=10)
 
 # Iniciar monitoreo en background thread
-thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
-thread.start()
+# IMPORTANT: Only start if not already running (prevents multiple threads in multi-worker scenarios)
+if not monitor.running:
+    print(f"🚀 Starting background monitoring thread (PID: {os.getpid()})")
+    thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
+    thread.start()
+else:
+    print(f"⚠️  Background thread already running, skipping initialization")
 
 # Routes
 
