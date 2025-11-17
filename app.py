@@ -56,11 +56,18 @@ class MonitorGGAL:
     def monitorear_background(self, intervalo=10):
         self.running = True
         print(f"Iniciando monitoreo de {self.symbol}...")
+        print(f"API key length: {len(self.api_key)}, Is demo: {self.api_key == 'demo'}")
+
         while self.running:
-            precio = self.obtener_precio()
-            if precio:
-                self.historial.append(precio)
-                print(f"[{precio['timestamp']}] Precio: ${precio['price']:.2f}")
+            try:
+                precio = self.obtener_precio()
+                if precio:
+                    self.historial.append(precio)
+                    print(f"[{precio['timestamp']}] Precio: ${precio['price']:.2f} (historial size: {len(self.historial)})")
+                else:
+                    print(f"⚠️  obtener_precio() returned None")
+            except Exception as e:
+                print(f"❌ Error in monitorear_background: {e}")
             time.sleep(intervalo)
     
     def obtener_historial(self):
