@@ -161,43 +161,6 @@
             50% { opacity: 0.3; }
         }
 
-        /* Signal strength meter */
-        .signal-strength {
-            margin: 20px 0;
-        }
-
-        .strength-label {
-            font-size: 0.85em;
-            color: #a8b2d1;
-            margin-bottom: 8px;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .strength-bar {
-            width: 100%;
-            height: 30px;
-            background: #0f1b30;
-            border-radius: 15px;
-            overflow: hidden;
-            border: 1px solid #1a2942;
-            position: relative;
-        }
-
-        .strength-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #fc5c65 0%, #fed330 50%, #26de81 100%);
-            transition: width 0.5s ease;
-            border-radius: 15px;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            padding-right: 12px;
-            font-weight: 600;
-            font-size: 0.9em;
-            color: #0a0e27;
-        }
-
         .forecast-details {
             background: #0f1b30;
             padding: 15px;
@@ -329,65 +292,22 @@
                     <span class="loading">Esperando...</span>
                 </div>
 
-                <div class="signal-strength" id="signalStrengthContainer" style="display: none;">
-                    <div class="strength-label">
-                        <span>Fuerza de la señal</span>
-                        <span id="strengthValue">--</span>
+                <div class="forecast-details" id="signalDetails" style="display: none; margin-top: 15px;">
+                    <div class="forecast-row">
+                        <span class="forecast-label">Fuerza de la señal:</span>
+                        <span class="forecast-value" id="signalStrength">--</span>
                     </div>
-                    <div class="strength-bar">
-                        <div class="strength-fill" id="strengthFill" style="width: 0%;">
-                            <span id="strengthText"></span>
-                        </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Confianza:</span>
+                        <span class="forecast-value" id="signalConfidence">--</span>
                     </div>
-                </div>
-
-                <div id="signalReason" style="color: #8a95a7; font-size: 0.9em; margin-top: 15px; text-align: center;">--</div>
-            </div>
-
-            <!-- Prediction Accuracy Metrics -->
-            <div class="card full-width">
-                <h2>Precisión del Modelo</h2>
-                <div id="metricsContent">
-                    <div class="loading">Esperando validaciones...</div>
-                </div>
-
-                <div id="accuracyMetrics" style="display: none;">
-                    <div class="stats" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 15px;">
-                        <div class="stat-item">
-                            <div class="stat-label">Precisión Direccional</div>
-                            <div class="stat-value" id="dirAccuracy">--</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Error Promedio</div>
-                            <div class="stat-value" id="mape">--</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Cobertura IC 95%</div>
-                            <div class="stat-value" id="coverage">--</div>
-                        </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Cambio esperado:</span>
+                        <span class="forecast-value" id="priceChangeForecast">--</span>
                     </div>
-
-                    <div class="forecast-details">
-                        <div class="forecast-row">
-                            <span class="forecast-label">Predicciones totales:</span>
-                            <span class="forecast-value" id="totalPredictions">--</span>
-                        </div>
-                        <div class="forecast-row">
-                            <span class="forecast-label">Predicciones validadas:</span>
-                            <span class="forecast-value" id="validatedPredictions">--</span>
-                        </div>
-                        <div class="forecast-row">
-                            <span class="forecast-label">Error absoluto medio (MAE):</span>
-                            <span class="forecast-value" id="mae">--</span>
-                        </div>
-                        <div class="forecast-row">
-                            <span class="forecast-label">Rendimiento reciente:</span>
-                            <span class="forecast-value" id="recentMape">--</span>
-                        </div>
-                        <div class="forecast-row">
-                            <span class="forecast-label">Evaluación del modelo:</span>
-                            <span class="forecast-value" id="modelSummary" style="font-weight: 700;">--</span>
-                        </div>
+                    <div class="forecast-row">
+                        <span class="forecast-label">Razón:</span>
+                        <span class="forecast-value" id="signalReason" style="font-size: 0.9em;">--</span>
                     </div>
                 </div>
             </div>
@@ -482,60 +402,18 @@
                     };
                     signalEl.textContent = signal.signal;
                     signalEl.style.color = signalColors[signal.signal];
-                    document.getElementById('signalReason').textContent = signal.reason;
 
-                    // Update signal strength meter
+                    // Update signal details
                     if (signal.signal_strength !== undefined) {
-                        document.getElementById('signalStrengthContainer').style.display = 'block';
-                        document.getElementById('strengthValue').textContent = signal.signal_strength + '/100';
-                        document.getElementById('strengthFill').style.width = signal.signal_strength + '%';
-                        document.getElementById('strengthText').textContent = signal.signal_strength;
+                        document.getElementById('signalDetails').style.display = 'block';
+                        document.getElementById('signalStrength').textContent = signal.signal_strength + '/100';
+                        document.getElementById('signalConfidence').textContent = signal.confidence || '--';
+                        document.getElementById('priceChangeForecast').textContent =
+                            signal.price_change_forecast !== undefined ? signal.price_change_forecast.toFixed(2) + '%' : '--';
+                        document.getElementById('signalReason').textContent = signal.reason;
                     }
                 } else if (respSignal.status === 202) {
                     document.getElementById('tradingSignal').innerHTML = '<span class="loading" style="font-size: 0.7em;">Esperando datos...</span>';
-                }
-
-                // Prediction Accuracy Metrics
-                const respMetrics = await fetch('/api/prediction-metrics');
-                if (respMetrics.ok) {
-                    const metricsData = await respMetrics.json();
-                    const metrics = metricsData.metrics;
-
-                    if (metrics && metrics.validated_predictions > 0) {
-                        // Hide loading, show metrics
-                        document.getElementById('metricsContent').style.display = 'none';
-                        document.getElementById('accuracyMetrics').style.display = 'block';
-
-                        // Update main metrics
-                        document.getElementById('dirAccuracy').textContent = metrics.metrics.directional_accuracy.toFixed(1) + '%';
-                        document.getElementById('mape').textContent = metrics.metrics.mape.toFixed(2) + '%';
-                        document.getElementById('coverage').textContent = metrics.metrics.interval_coverage.toFixed(1) + '%';
-
-                        // Update detailed metrics
-                        document.getElementById('totalPredictions').textContent = metrics.total_predictions;
-                        document.getElementById('validatedPredictions').textContent = metrics.validated_predictions;
-                        document.getElementById('mae').textContent = '$' + metrics.metrics.mae.toFixed(3);
-                        document.getElementById('recentMape').textContent = metrics.metrics.recent_mape.toFixed(2) + '%';
-
-                        // Update summary with color coding
-                        const summaryEl = document.getElementById('modelSummary');
-                        summaryEl.textContent = metrics.summary;
-
-                        // Color code based on performance
-                        if (metrics.summary.includes('Excellent')) {
-                            summaryEl.style.color = '#26de81';
-                        } else if (metrics.summary.includes('Good')) {
-                            summaryEl.style.color = '#64ffda';
-                        } else if (metrics.summary.includes('Fair')) {
-                            summaryEl.style.color = '#fed330';
-                        } else {
-                            summaryEl.style.color = '#fc5c65';
-                        }
-                    } else {
-                        // No validated predictions yet
-                        document.getElementById('metricsContent').innerHTML =
-                            '<div class="loading">Esperando validaciones (se necesitan 5+ minutos)...</div>';
-                    }
                 }
 
             } catch (error) {
