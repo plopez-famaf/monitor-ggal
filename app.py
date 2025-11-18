@@ -7,6 +7,7 @@ from collections import deque
 import os
 import sys
 from forecaster import GGALForecaster
+from prediction_tracker import PredictionTracker
 
 # Force unbuffered output for immediate logging visibility
 import functools
@@ -98,6 +99,7 @@ if not api_key:
 
 monitor = MonitorGGAL(api_key=api_key)
 forecaster = GGALForecaster(min_samples=10)
+prediction_tracker = PredictionTracker(max_predictions=100)
 
 # Background thread initialization moved to gunicorn_config.py post_fork hook
 # This prevents duplicate threads when Gunicorn forks worker processes
@@ -182,6 +184,16 @@ def forecast():
         return jsonify({"error": "Insufficient data", "message": "Need at least 10 data points"}), 202
 
     forecasts = forecaster.get_all_forecasts(monitor.historial, horizons=[1, 5, 10])
+
+    # Store 5-minute prediction for validation
+    if '5min' in forecasts:
+        prediction_tracker.add_prediction(forecasts['5min'])
+
+    # Validate old predictions against current price history
+    validated_count = prediction_tracker.validate_predictions(monitor.historial)
+    if validated_count > 0:
+        print(f"✅ Validated {validated_count} prediction(s)")
+
     return jsonify(forecasts)
 
 @app.route('/api/trading-signal')
@@ -192,6 +204,24 @@ def trading_signal():
 
     signal = forecaster.generate_trading_signal(monitor.historial)
     return jsonify(signal)
+
+@app.route('/api/prediction-metrics')
+def prediction_metrics():
+    """Get accuracy metrics for predictions."""
+    # Validate pending predictions first
+    prediction_tracker.validate_predictions(monitor.historial)
+
+    # Get metrics
+    metrics = prediction_tracker.get_accuracy_metrics()
+
+    # Get recent predictions
+    recent = prediction_tracker.get_recent_predictions(limit=10)
+
+    return jsonify({
+        'metrics': metrics,
+        'recent_predictions': recent,
+        'timestamp': datetime.now().isoformat()
+    })
 
 if __name__ == '__main__':
     # Start background thread for local development (not needed when using gunicorn)
