@@ -136,12 +136,13 @@ def main():
         '/api/forecast',
         '/api/trading-signal',
         'forecast5min',
-        'signal_strength',
-        'strength-bar',
+        'signalDetails',
+        'signalStrength',
+        'signalConfidence',
         '#0a0e27'  # Dark background color
     ])
     if html_checks:
-        print("  ✓ index.html has Kalman UI with signal strength meter")
+        print("  ✓ index.html has Kalman UI with simplified signal display")
     else:
         print("  ✗ index.html is missing UI components")
         all_checks_passed = False
@@ -151,7 +152,7 @@ def main():
     # Check file sizes (basic sanity check)
     print("7. Checking File Sizes:")
     size_checks = {
-        'app.py': (2000, 5000),
+        'app.py': (2000, 9000),  # Larger due to gunicorn config integration
         'forecaster.py': (8000, 12000),  # Smaller with Kalman only
         'test_app.py': (12000, 16000),   # Updated for Kalman tests
         'templates/index.html': (12000, 16000)  # Simplified without Chart.js
