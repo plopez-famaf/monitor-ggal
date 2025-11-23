@@ -4,35 +4,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Flask-based web application that monitors real-time stock price of GGAL (Banco Galicia ADR) using the Finnhub API. Features live price updates, historical charts, statistics, and ML-based price forecasting for short-term trading signals.
+Real-time GGAL (Banco Galicia ADR) stock monitoring with Kalman Filter forecasting. Features **CLI REPL interface** (primary) and optional Flask web API. Minimal boilerplate, maximum performance.
 
-See [README.md](README.md) for user-facing documentation.
+See [CLI.md](CLI.md) for CLI documentation and [README.md](README.md) for web interface.
 
 ## Architecture
 
 ### Core Components
 
-**Backend (`app.py`)**
-- Flask web server with REST API endpoints
-- `MonitorGGAL` class: Background daemon thread that polls Finnhub API every 10 seconds
-- In-memory storage: `deque(maxlen=1000)` for price history (no database persistence)
-- `GGALForecaster` class: Ensemble ML forecasting for 1/5/10-minute predictions
+**CLI (`cli.py`)** - PRIMARY INTERFACE
+- REPL interactive terminal with Rich library rendering
+- Commands: status, forecast, signal, stats, metrics, history
+- Background monitoring thread (10s polling)
+- ~250 lines, <50ms command latency, 30MB memory
 
-**Frontend (`templates/index.html`)**
-- Single-page vanilla JavaScript app with Chart.js visualization
+**Monitoring (`monitor.py`)** - SHARED MODULE
+- `MonitorGGAL` class: Background daemon thread polling Finnhub API
+- In-memory storage: `deque(maxlen=1000)` for price history
+- Used by both CLI and Flask API
+
+**Forecasting (`forecaster.py`)**
+- `GGALForecaster` class: Kalman Filter for 1/5/10-minute predictions
+- Trading signal generation with numeric strength (0-100)
+
+**Tracking (`prediction_tracker.py`)**
+- Validates predictions against actual prices
+- Accuracy metrics: directional accuracy, MAPE, MAE, coverage
+
+**Web API (`app.py`)** - OPTIONAL
+- Flask REST API endpoints (for web dashboard or integrations)
+- Same backend as CLI (shares `monitor.MonitorGGAL` instance)
+
+**Web Frontend (`templates/index.html`)** - OPTIONAL
+- Single-page vanilla JavaScript app with Chart.js
 - Auto-refreshes every 10 seconds via API polling
-- Dark theme UI with real-time updates
 
 ### Data Flow
 
-1. **Production (Gunicorn)**: `gunicorn_config.py` `post_fork()` hook starts background thread after worker fork
-2. **Local Dev**: Thread started in `__main__` block when running `python app.py`
-3. Background daemon thread continuously polls Finnhub API → `obtener_precio()`
-4. Price data appended to in-memory `historial` deque (max 1000 entries)
-5. Frontend polls API endpoints every 10 seconds
-6. Forecaster analyzes price history on demand to generate predictions
+**CLI Mode (primary):**
+1. `cli.py` starts `MonitorGGAL` background thread via `monitor.start()`
+2. Thread polls Finnhub API every 10s → `obtener_precio()`
+3. Price data appended to in-memory `historial` deque (max 1000 entries)
+4. User commands read from `historial` instantly (no network latency)
+5. Forecaster analyzes history on-demand for predictions
 
-**CRITICAL**: Thread must start AFTER Gunicorn forks workers, not during module import. Otherwise multiple threads run simultaneously and data collection becomes inconsistent.
+**Web Mode (optional):**
+1. **Production (Gunicorn)**: `gunicorn_config.py` `post_fork()` hook starts thread
+2. **Local Dev**: Thread started in `__main__` block when running `python app.py`
+3. Frontend JavaScript polls API endpoints every 10 seconds
+4. Same data flow as CLI (shared `monitor` instance)
+
+**CRITICAL for Web/Gunicorn**: Thread must start AFTER worker fork, not during module import. Otherwise multiple threads run simultaneously causing data inconsistency.
 
 ### API Endpoints
 
@@ -59,7 +81,11 @@ See [README.md](README.md) for user-facing documentation.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run with API key (REQUIRED)
+# Run CLI REPL (PRIMARY INTERFACE)
+export FINNHUB_API_KEY="your_api_key_here"
+python cli.py
+
+# Run web server (OPTIONAL - for dashboard/API)
 export FINNHUB_API_KEY="your_api_key_here"
 python app.py
 
@@ -69,11 +95,11 @@ python debug_api.py
 # Run comprehensive test suite (30+ test cases)
 python test_app.py
 
-# Production deployment (Render.com with Gunicorn)
+# Production web deployment (Render.com with Gunicorn)
 gunicorn -c gunicorn_config.py app:app
 ```
 
-Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUIA_DEPLOY_RENDER.md) for deployment instructions.
+**CLI** is the recommended interface. **Web server** runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUIA_DEPLOY_RENDER.md) for web deployment instructions.
 
 **Important:**
 - ⚠️ Without valid `FINNHUB_API_KEY`, app will show warning but **NO DATA will be collected**
@@ -86,18 +112,19 @@ Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUI
 ### Background Monitoring
 
 **Thread Initialization:**
-- **Production**: Started via `gunicorn_config.py` `post_fork()` hook after worker process fork
-- **Local Dev**: Started in `if __name__ == '__main__'` block when running `python app.py`
+- **CLI**: `monitor.start(intervalo=10)` in `cli.py` main loop
+- **Web Production**: `gunicorn_config.py` `post_fork()` hook after worker fork
+- **Web Local Dev**: Started in `if __name__ == '__main__'` block in `app.py`
 - Runs as daemon thread → automatically terminates with main process
-- No graceful shutdown needed
+- No graceful shutdown needed (CLI has `monitor.stop()` for clean exit)
 
 **Configuration:**
 - 10-second polling interval = 6 calls/min (well within Finnhub free tier 60/min limit)
-- To change interval: modify `args=(10,)` in `gunicorn_config.py` or `app.py` __main__ block
-- To change symbol: modify `self.symbol = "GGAL"` in `MonitorGGAL.__init__()`
+- To change interval: modify `monitor.start(intervalo=N)` calls
+- To change symbol: modify `symbol="GGAL"` in `MonitorGGAL()` instantiation
 - All data lost on restart (no persistence)
 
-**CRITICAL for Production (Render.com):**
+**CRITICAL for Web Production (Render.com):**
 - Data stored in-memory in `monitor.historial` deque
 - **MUST use single Gunicorn worker** (`workers=1` in `gunicorn_config.py`)
 - Multiple workers = separate memory spaces = requests see empty historial
@@ -105,6 +132,7 @@ Server runs on http://localhost:5001 by default. See [GUIA_DEPLOY_RENDER.md](GUI
   - If started at import: parent process starts thread → worker fork → worker also starts thread = 2 threads
   - Both threads write to same deque causing data inconsistency
   - See `gunicorn_config.py` for correct implementation
+- **CLI has no such restriction** (single process, single thread)
 
 ### Forecasting System (`forecaster.py`)
 

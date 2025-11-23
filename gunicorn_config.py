@@ -17,12 +17,7 @@ def post_fork(server, worker):
     # Only start if not already running
     if not monitor.running:
         print(f"🚀 [Worker {worker.pid}] Starting background monitoring thread")
-        thread = threading.Thread(
-            target=monitor.monitorear_background,
-            args=(10,),
-            daemon=True
-        )
-        thread.start()
+        monitor.start(intervalo=10)
         print(f"✅ [Worker {worker.pid}] Background thread started successfully")
     else:
         print(f"⚠️  [Worker {worker.pid}] Background thread already running")

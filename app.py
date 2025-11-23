@@ -1,11 +1,8 @@
 from flask import Flask, jsonify, render_template
-import requests
 import threading
-import time
-from datetime import datetime
-from collections import deque
 import os
 import sys
+from monitor import MonitorGGAL
 from forecaster import GGALForecaster
 from prediction_tracker import PredictionTracker
 
@@ -14,70 +11,6 @@ import functools
 print = functools.partial(print, flush=True)
 
 app = Flask(__name__)
-
-class MonitorGGAL:
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.symbol = "GGAL"
-        self.historial = deque(maxlen=1000)
-        self.running = False
-    
-    def obtener_precio(self):
-        try:
-            response = requests.get(
-                "https://finnhub.io/api/v1/quote",
-                params={
-                    "symbol": self.symbol,
-                    "token": self.api_key
-                },
-                timeout=5
-            )
-            data = response.json()
-
-            # Check for API errors
-            if "error" in data:
-                print(f"❌ Finnhub API Error: {data['error']}")
-                if response.status_code == 401:
-                    print(f"   → API key inválida. Configura: export FINNHUB_API_KEY='tu_key'")
-                return None
-
-            if "c" in data and data["c"] > 0:
-                return {
-                    "timestamp": datetime.now().isoformat(),
-                    "price": data.get("c", 0),
-                    "high": data.get("h", 0),
-                    "low": data.get("l", 0),
-                    "open": data.get("o", 0),
-                    "change": round(data.get("c", 0) - data.get("pc", 0), 2),
-                    "change_percent": round((data.get("c", 0) - data.get("pc", 0)) / data.get("pc", 1) * 100, 2)
-                }
-            elif "c" in data and data["c"] == 0:
-                print(f"⚠️  Precio = 0 (mercado cerrado o símbolo no disponible)")
-                return None
-
-        except Exception as e:
-            print(f"Error obteniendo precio: {e}")
-        return None
-    
-    def monitorear_background(self, intervalo=10):
-        self.running = True
-        print(f"Iniciando monitoreo de {self.symbol}...")
-        print(f"API key length: {len(self.api_key)}, Is demo: {self.api_key == 'demo'}")
-
-        while self.running:
-            try:
-                precio = self.obtener_precio()
-                if precio:
-                    self.historial.append(precio)
-                    print(f"[{precio['timestamp']}] Precio: ${precio['price']:.2f} (historial size: {len(self.historial)})")
-                else:
-                    print(f"⚠️  obtener_precio() returned None")
-            except Exception as e:
-                print(f"❌ Error in monitorear_background: {e}")
-            time.sleep(intervalo)
-    
-    def obtener_historial(self):
-        return list(self.historial)
 
 # Obtener API key desde variable de entorno
 api_key = os.environ.get('FINNHUB_API_KEY')
@@ -227,8 +160,7 @@ if __name__ == '__main__':
     # Start background thread for local development (not needed when using gunicorn)
     if not monitor.running:
         print(f"🚀 [Local Dev] Starting background monitoring thread (PID: {os.getpid()})")
-        thread = threading.Thread(target=monitor.monitorear_background, args=(10,), daemon=True)
-        thread.start()
+        monitor.start(intervalo=10)
 
     port = int(os.environ.get('PORT', 5001))
     app.run(debug=False, host='0.0.0.0', port=port)
