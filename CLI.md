@@ -71,7 +71,8 @@ The system now runs **continuous forecasting** in the background:
 
 - **Auto-generation**: Forecasts are generated every 30 seconds (configurable via `FORECAST_INTERVAL`)
 - **Auto-validation**: Predictions are automatically validated after 5 minutes
-- **Auto-alerts**: Alerts trigger when price change exceeds threshold (default 0.1%)
+- **Push alerts**: Alerts appear immediately when price change exceeds threshold (default 0.1%)
+- **Alert expiry**: Each alert is valid for 5 minutes (forecast horizon)
 - **No manual trigger**: The `forecast` command only displays the current forecast (doesn't generate new)
 
 ```bash
@@ -83,9 +84,11 @@ python cli.py
 **How it works:**
 1. Background thread generates forecasts every 30s for all symbols
 2. Each forecast is stored in `last_forecasts` and tracked for validation
-3. After 5 minutes, predictions are validated against actual prices
-4. If price change exceeds threshold, alert is triggered automatically
-5. Use `forecast` command to view the current prediction anytime
+3. If price change ≥ threshold, **alert appears immediately** (push notification)
+4. Alert shows: symbol, direction, %, price range, and expiry time (5 min)
+5. After 5 minutes, predictions are validated against actual prices
+6. Expired alerts are automatically removed from active list
+7. Use `forecast` command to view the current prediction anytime
 
 ### Examples
 
@@ -157,7 +160,7 @@ BUY ████████████████████ 82/100
 Strong upward momentum with low uncertainty
 ```
 
-**Price alerts (automatic notifications):**
+**Price alerts (automatic push notifications):**
 ```
 ggal> alerts
 Alert Settings:
@@ -169,10 +172,22 @@ Usage:
   alerts off  - Disable alerts
   alerts 0.5  - Set threshold to 0.5%
 
-# When a significant price movement is detected:
-🔔 ALERTAS DE PRECIO:
-  • GGAL: ↗ +0.85% (predicted in 5 min)
-  • BTC: ↘ -1.2% (predicted in 5 min)
+# When a significant price movement is detected (appears immediately):
+
+🔔 ALERTA DE PRECIO:
+  • BTC (Bitcoin / USDT): ↗ +0.85% | $43,521.00 → $43,891.00
+  Válida hasta: 14:28:45
+
+ggal> _  (continues waiting for input)
+
+# View active alerts anytime:
+ggal> (press Enter without command)
+
+🔔 ALERTAS ACTIVAS:
+  • GGAL (Banco Galicia ADR): ↗ +0.65% | $45.67 → $45.97
+    Válida hasta: 14:28:30
+  • BTC (Bitcoin / USDT): ↘ -1.20% | $43,521 → $43,000
+    Válida hasta: 14:29:15
 ```
 
 **Statistics:**

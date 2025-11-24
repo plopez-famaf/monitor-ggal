@@ -8,7 +8,7 @@ import sys
 import time
 import threading
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -546,49 +546,45 @@ class MultiSymbolCLI:
         help_text = help_text.replace('{interval}', str(self.forecast_interval))
         console.print(help_text)
 
-    def _check_alerts(self):
-        """Check all symbols for significant price movements in forecasts."""
-        if not self.alerts_enabled:
-            return
+    def _display_single_alert(self, symbol_key, alert_data):
+        """Display a single price alert immediately (push notification)."""
+        symbol_name = self.symbols_config[symbol_key]['name']
+        color = alert_data['color']
+        direction = alert_data['direction']
+        change_pct = alert_data['change_pct']
+        current = alert_data['current']
+        predicted = alert_data['predicted']
+        expiry_time = alert_data['expiry_time'].strftime('%H:%M:%S')
 
-        for key, monitor in self.monitors.items():
-            # Skip if not enough data
-            if len(monitor.historial) < 10:
-                continue
-
-            # Get forecast for this symbol
-            forecaster = self.forecasters[key]
-            forecasts = forecaster.get_all_forecasts(monitor.historial)
-
-            if '5min' in forecasts:
-                pred = forecasts['5min']
-                change_pct = abs(pred['price_change_pct'])
-
-                # Check if exceeds threshold
-                if change_pct >= self.alert_threshold:
-                    # Create alert message
-                    direction = "↗ SUBE" if pred['price_change'] > 0 else "↘ BAJA"
-                    color = "green" if pred['price_change'] > 0 else "red"
-
-                    alert_msg = {
-                        'symbol': key,
-                        'direction': direction,
-                        'color': color,
-                        'change_pct': pred['price_change_pct'],
-                        'current': pred['current_price'],
-                        'predicted': pred['prediction'],
-                        'timestamp': datetime.now()
-                    }
-
-                    # Update pending alerts
-                    self.pending_alerts[key] = alert_msg
+        # Print alert immediately (interrupts prompt)
+        print()  # New line
+        console.print(f"[bold yellow]🔔 ALERTA DE PRECIO:[/bold yellow]")
+        console.print(
+            f"  [{color}]• {symbol_key}[/{color}] ({symbol_name}): {direction} "
+            f"[bold]{change_pct:+.2f}%[/bold] | ${current:.2f} → ${predicted:.2f}"
+        )
+        console.print(f"  [dim]Válida hasta: {expiry_time}[/dim]")
+        print()  # New line for separation
 
     def _display_alerts(self):
-        """Display pending price alerts."""
+        """Display pending price alerts and clean expired ones."""
         if not self.pending_alerts:
             return
 
-        console.print("\n[bold yellow]🔔 ALERTAS DE PRECIO:[/bold yellow]")
+        # Clean expired alerts
+        current_time = datetime.now()
+        expired_keys = [
+            key for key, alert in self.pending_alerts.items()
+            if current_time > alert['expiry_time']
+        ]
+        for key in expired_keys:
+            del self.pending_alerts[key]
+
+        # Show remaining alerts
+        if not self.pending_alerts:
+            return
+
+        console.print("\n[bold yellow]🔔 ALERTAS ACTIVAS:[/bold yellow]")
 
         for key, alert in self.pending_alerts.items():
             symbol_name = self.symbols_config[key]['name']
@@ -597,16 +593,13 @@ class MultiSymbolCLI:
             change_pct = alert['change_pct']
             current = alert['current']
             predicted = alert['predicted']
+            expiry_time = alert['expiry_time'].strftime('%H:%M:%S')
 
             console.print(
                 f"  [{color}]• {key}[/{color}] ({symbol_name}): {direction} "
                 f"[bold]{change_pct:+.2f}%[/bold] | ${current:.2f} → ${predicted:.2f}"
             )
-
-        console.print("[dim]Escribe cualquier comando para continuar...[/dim]\n")
-
-        # Clear alerts after display
-        self.pending_alerts.clear()
+            console.print(f"    [dim]Válida hasta: {expiry_time}[/dim]")
 
     def cmd_alerts(self, args):
         """Configure or show alert settings."""
@@ -761,14 +754,27 @@ class MultiSymbolCLI:
                             if abs(change_pct) >= self.alert_threshold:
                                 direction = "↗" if change_pct > 0 else "↘"
                                 color = "green" if change_pct > 0 else "red"
-                                self.pending_alerts[key] = {
+
+                                # Calculate alert expiry (forecast time + 5 min)
+                                forecast_time = datetime.fromisoformat(forecast['timestamp'])
+                                expiry_time = forecast_time + timedelta(minutes=5)
+
+                                alert_data = {
                                     'forecast': forecast,
                                     'direction': direction,
                                     'change_pct': change_pct,
                                     'color': color,
                                     'current': forecast['current_price'],
-                                    'predicted': forecast['prediction']
+                                    'predicted': forecast['prediction'],
+                                    'forecast_time': forecast_time,
+                                    'expiry_time': expiry_time
                                 }
+
+                                # Only trigger if it's a new alert (not already pending)
+                                if key not in self.pending_alerts:
+                                    self.pending_alerts[key] = alert_data
+                                    # Display immediately (push notification)
+                                    self._display_single_alert(key, alert_data)
 
                 # Sleep until next iteration
                 time.sleep(self.forecast_interval)
