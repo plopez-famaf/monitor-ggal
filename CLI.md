@@ -11,7 +11,11 @@ pip install -r requirements.txt
 # Set API key (required)
 export FINNHUB_API_KEY="your_api_key_here"
 
-# Run CLI
+# Run CLI (Kalman Filter only - default)
+python cli.py
+
+# Run CLI with AutoML (Ensemble: Kalman + Auto-ARIMA)
+export USE_AUTOML=true
 python cli.py
 ```
 
@@ -73,13 +77,32 @@ Prediction Effectiveness: ████████░░ 82/100 (GOOD)
 **Get 5-minute forecast:**
 ```
 ggal> forecast
-Horizon:   5 min (fixed)
-Current:   $45.67
-Predicted: ↗ $45.92
-Change:    +0.25 (+0.55%)
-Velocity:  0.0025 $/min
-IC 95%:    $45.68 - $46.16
-Trend:     UP
+Forecast at: 14:23:45
+Target time: 14:28:45
+Horizon:     5 min (fixed)
+Current:     $45.67
+Predicted:   ↗ $45.92
+Change:      +0.25 (+0.55%)
+Velocity:    0.0025 $/min
+IC 95%:      $45.68 - $46.16
+Trend:       UP
+Model:       Kalman Filter
+```
+
+**With AutoML enabled:**
+```
+ggal> forecast
+Forecast at: 14:23:45
+Target time: 14:28:45
+Horizon:     5 min (fixed)
+Current:     $45.67
+Predicted:   ↗ $45.89
+Change:      +0.22 (+0.48%)
+Velocity:    0.0022 $/min
+IC 95%:      $45.65 - $46.13
+Trend:       UP
+Model:       Ensemble (Kalman + Auto-ARIMA)
+ARIMA order: (2, 1, 1)
 ```
 
 **Effectiveness index breakdown:**
@@ -133,12 +156,71 @@ ggal> history
 └──────────┴────────┴───────────────────┘
 ```
 
+## AutoML Mode (Optional)
+
+El sistema incluye un modo **AutoML** que utiliza Auto-ARIMA para selección automática de parámetros:
+
+### ¿Cuándo usar AutoML?
+
+**Usar Kalman Filter (default):**
+- Startup rápido (1s)
+- Baja latencia (<50ms por forecast)
+- Menor uso de memoria (~30MB)
+- Óptimo para trading de alta frecuencia
+
+**Usar AutoML Ensemble:**
+- Mejor accuracy potencial
+- Combina Kalman + Auto-ARIMA
+- Reentrenamiento automático cada 10 datos
+- Requiere 30+ muestras (vs 10 para Kalman)
+- Latencia: ~100-150ms (primera vez: 2-5s)
+
+### Activación
+
+```bash
+export USE_AUTOML=true
+python cli.py
+```
+
+### Componentes del Ensemble
+
+El Ensemble combina:
+1. **Kalman Filter** (40% peso): Rápido, suave, bueno para tendencias
+2. **Auto-ARIMA** (60% peso): Adaptativo, encuentra mejor orden (p,d,q)
+
+Los pesos se pueden ajustar automáticamente basados en effectiveness index.
+
+## CLI Features
+
+### Command History & Autocomplete
+
+La CLI incluye:
+- **Historial de comandos**: Usa ↑/↓ para navegar comandos anteriores
+- **Autocompletado**: Presiona Tab para autocompletar comandos
+- **Comandos guardados en memoria**: Persisten durante la sesión
+
+Ejemplos:
+```
+ggal> for[TAB]        → forecast
+ggal> sw[TAB] btc[TAB] → switch btc
+```
+
+### Timestamps
+
+Todos los forecasts muestran:
+- **Forecast at**: Hora en que se generó la predicción
+- **Target time**: Hora objetivo (forecast at + 5 min)
+
+Esto permite validar fácilmente las predicciones manualmente.
+
 ## Architecture
 
 ```
 cli.py                  # REPL interface (this module)
 monitor.py              # Background price polling
 forecaster.py           # Kalman Filter forecasting
+automl_forecaster.py    # Auto-ARIMA forecasting
+ensemble_forecaster.py  # Ensemble (Kalman + AutoML)
 prediction_tracker.py   # Accuracy validation
 app.py                  # Flask API (optional, for web interface)
 ```

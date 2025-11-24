@@ -9,7 +9,9 @@ from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import InMemoryHistory
 from monitor import PriceMonitor
 from forecaster import GGALForecaster
 from prediction_tracker import PredictionTracker
@@ -20,7 +22,7 @@ console = Console()
 class MultiSymbolCLI:
     """REPL interface for multi-symbol monitoring."""
 
-    def __init__(self, symbols_config):
+    def __init__(self, symbols_config, use_automl=False):
         """
         Initialize CLI with multiple symbols.
 
@@ -30,12 +32,23 @@ class MultiSymbolCLI:
                     'GGAL': {'type': 'stock', 'api_key': 'xxx', 'name': 'Banco Galicia ADR'},
                     'BTC': {'type': 'crypto', 'symbol': 'BTCUSDT', 'name': 'Bitcoin/USDT'}
                 }
+            use_automl: If True, use Ensemble forecaster (Kalman + Auto-ARIMA)
         """
         self.symbols_config = symbols_config
         self.monitors = {}
         self.forecasters = {}
         self.trackers = {}
         self.running = True
+        self.use_automl = use_automl
+
+        # Import forecaster based on mode
+        if use_automl:
+            from ensemble_forecaster import EnsembleForecaster
+            forecaster_class = EnsembleForecaster
+            min_samples = 30
+        else:
+            forecaster_class = GGALForecaster
+            min_samples = 10
 
         # Initialize monitors for each symbol
         for key, config in symbols_config.items():
@@ -45,11 +58,21 @@ class MultiSymbolCLI:
                 api_type=config['type'],
                 api_key=config.get('api_key')
             )
-            self.forecasters[key] = GGALForecaster(min_samples=10)
+            self.forecasters[key] = forecaster_class(min_samples=min_samples)
             self.trackers[key] = PredictionTracker(max_predictions=100)
 
         # Start with first symbol
         self.current_symbol = list(symbols_config.keys())[0]
+
+        # Command history and autocomplete
+        self.history = InMemoryHistory()
+        self.completer = WordCompleter(
+            ['status', 's', 'forecast', 'f', 'signal', 'sig', 'accuracy', 'acc',
+             'stats', 'metrics', 'm', 'history', 'h', 'symbols', 'switch', 'sw',
+             'help', 'quit', 'q', 'exit'] + list(symbols_config.keys()),
+            ignore_case=True
+        )
+        self.session = PromptSession(history=self.history, completer=self.completer)
 
     @property
     def monitor(self):
@@ -68,21 +91,24 @@ class MultiSymbolCLI:
 
     def start(self):
         """Start background monitoring and REPL."""
-        console.print("\n[bold cyan]Multi-Symbol Monitor CLI[/bold cyan] - Kalman Filter Forecasting\n")
+        model_type = "Ensemble (Kalman + Auto-ARIMA)" if self.use_automl else "Kalman Filter"
+        console.print(f"\n[bold cyan]Multi-Symbol Monitor CLI[/bold cyan] - {model_type} Forecasting\n")
 
         # Start monitoring threads for all symbols
         for key, monitor in self.monitors.items():
             monitor.start(intervalo=10)
             console.print(f"[dim]Started monitoring {key} ({self.symbols_config[key]['name']})[/dim]")
 
-        console.print("\n[dim]Type 'help' for commands, 'quit' to exit[/dim]\n")
+        console.print("\n[dim]Type 'help' for commands, 'quit' to exit[/dim]")
+        console.print("[dim]Command history: ↑/↓ arrows | Tab: autocomplete[/dim]\n")
 
-        # REPL loop
+        # REPL loop with prompt-toolkit (history + autocomplete)
         while self.running:
             try:
-                prompt_label = f"[bold green]{self.current_symbol.lower()}[/bold green]"
-                cmd = Prompt.ask(prompt_label, default="status").strip().lower()
-                self.handle_command(cmd)
+                prompt_label = f"{self.current_symbol.lower()}> "
+                cmd = self.session.prompt(prompt_label).strip().lower()
+                if cmd:  # Only process non-empty commands
+                    self.handle_command(cmd)
             except KeyboardInterrupt:
                 console.print("\n[yellow]Use 'quit' to exit[/yellow]")
             except EOFError:
@@ -222,6 +248,14 @@ class MultiSymbolCLI:
         table.add_column(style="dim")
         table.add_column()
 
+        # Extract timestamp and format it
+        forecast_time = datetime.fromisoformat(pred['timestamp']).strftime('%H:%M:%S')
+        target_time = datetime.fromisoformat(pred['timestamp'])
+        from datetime import timedelta
+        target_time = (target_time + timedelta(minutes=5)).strftime('%H:%M:%S')
+
+        table.add_row("Forecast at:", f"[dim]{forecast_time}[/dim]")
+        table.add_row("Target time:", f"[dim]{target_time}[/dim]")
         table.add_row("Horizon:", f"[bold]5 min[/bold] (fixed)")
         table.add_row("Current:", f"${current:.2f}")
         table.add_row("Predicted:", f"[bold]{arrow} ${pred['prediction']:.2f}[/bold]")
@@ -229,6 +263,12 @@ class MultiSymbolCLI:
         table.add_row("Velocity:", f"{pred['velocity']:.4f} $/min")
         table.add_row("IC 95%:", f"${pred['lower_bound']:.2f} - ${pred['upper_bound']:.2f}")
         table.add_row("Trend:", f"[bold]{pred['trend'].upper()}[/bold]")
+
+        # Show model type if using AutoML
+        if 'model_type' in pred:
+            table.add_row("Model:", f"[dim]{pred['model_type']}[/dim]")
+            if 'model_order' in pred:
+                table.add_row("ARIMA order:", f"[dim]{pred['model_order']}[/dim]")
 
         console.print(table)
 
@@ -484,10 +524,14 @@ def main():
         console.print("[bold red]Error:[/bold red] FINNHUB_API_KEY not set")
         console.print("\n[dim]Get a free API key at: https://finnhub.io[/dim]")
         console.print("[dim]Then run: export FINNHUB_API_KEY='your_key'[/dim]")
-        console.print("\n[dim]To enable crypto: export ENABLE_CRYPTO=true[/dim]\n")
+        console.print("\n[dim]To enable crypto: export ENABLE_CRYPTO=true[/dim]")
+        console.print("[dim]To enable AutoML: export USE_AUTOML=true[/dim]\n")
         sys.exit(1)
 
-    cli = MultiSymbolCLI(symbols_config=symbols_config)
+    # Check if user wants AutoML (Ensemble forecaster)
+    use_automl = os.environ.get('USE_AUTOML', '').lower() in ('true', '1', 'yes')
+
+    cli = MultiSymbolCLI(symbols_config=symbols_config, use_automl=use_automl)
     cli.start()
 
 

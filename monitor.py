@@ -35,6 +35,11 @@ class PriceMonitor:
         self.running = False
         self._thread = None
 
+        # Error tracking
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = 5
+        self.last_error_time = None
+
     def obtener_precio(self):
         """Fetch current price from appropriate API."""
         if self.api_type == 'stock':
@@ -58,10 +63,12 @@ class PriceMonitor:
             # Check for API errors
             if "error" in data:
                 if response.status_code == 401:
-                    print(f"❌ Finnhub API key inválida")
+                    print(f"❌ [{self.symbol}] Finnhub API key inválida")
                 return None
 
             if "c" in data and data["c"] > 0:
+                # Success - reset error counter
+                self.consecutive_errors = 0
                 return {
                     "timestamp": datetime.now().isoformat(),
                     "price": data.get("c", 0),
@@ -74,8 +81,14 @@ class PriceMonitor:
             elif "c" in data and data["c"] == 0:
                 return None
 
+        except requests.exceptions.Timeout:
+            self._handle_error(f"[{self.symbol}] Finnhub timeout (5s) - red congestionada o servidor lento")
+        except requests.exceptions.ConnectionError as e:
+            self._handle_error(f"[{self.symbol}] Finnhub connection error - verificar internet")
+        except requests.exceptions.RequestException as e:
+            self._handle_error(f"[{self.symbol}] Finnhub request error: {type(e).__name__}")
         except Exception as e:
-            print(f"Error obteniendo precio Finnhub: {e}")
+            self._handle_error(f"[{self.symbol}] Finnhub unexpected error: {type(e).__name__} - {str(e)[:50]}")
         return None
 
     def _fetch_binance(self):
@@ -89,11 +102,13 @@ class PriceMonitor:
             )
 
             if response.status_code != 200:
-                print(f"❌ Binance API error: {response.status_code}")
+                self._handle_error(f"[{self.symbol}] Binance API error: HTTP {response.status_code}")
                 return None
 
             data = response.json()
 
+            # Success - reset error counter
+            self.consecutive_errors = 0
             return {
                 "timestamp": datetime.now().isoformat(),
                 "price": float(data.get("lastPrice", 0)),
@@ -105,9 +120,26 @@ class PriceMonitor:
                 "change_percent": float(data.get("priceChangePercent", 0))
             }
 
+        except requests.exceptions.Timeout:
+            self._handle_error(f"[{self.symbol}] Binance timeout (5s) - red congestionada o servidor lento")
+        except requests.exceptions.ConnectionError:
+            self._handle_error(f"[{self.symbol}] Binance connection error - verificar internet")
+        except requests.exceptions.RequestException as e:
+            self._handle_error(f"[{self.symbol}] Binance request error: {type(e).__name__}")
         except Exception as e:
-            print(f"Error obteniendo precio Binance: {e}")
+            self._handle_error(f"[{self.symbol}] Binance unexpected error: {type(e).__name__} - {str(e)[:50]}")
         return None
+
+    def _handle_error(self, message):
+        """Handle API errors with consecutive error tracking."""
+        self.consecutive_errors += 1
+        self.last_error_time = datetime.now()
+
+        # Only print if it's a new error or every 5th consecutive error
+        if self.consecutive_errors == 1 or self.consecutive_errors % 5 == 0:
+            print(f"⚠️  {message}")
+            if self.consecutive_errors >= self.max_consecutive_errors:
+                print(f"⚠️  [{self.symbol}] {self.consecutive_errors} errores consecutivos - verificar conectividad")
 
     def monitorear_background(self, intervalo=10):
         """Background polling loop."""
@@ -119,7 +151,7 @@ class PriceMonitor:
                 if precio:
                     self.historial.append(precio)
             except Exception as e:
-                print(f"❌ Error in monitorear_background: {e}")
+                self._handle_error(f"[{self.symbol}] Error crítico en monitoreo: {type(e).__name__}")
             time.sleep(intervalo)
 
     def start(self, intervalo=10):
