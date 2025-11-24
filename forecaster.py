@@ -129,10 +129,14 @@ class GGALForecaster:
     Focused on 5-minute predictions for optimal performance.
     """
 
-    def __init__(self, min_samples=10, horizon_minutes=5):
+    def __init__(self, min_samples=10, horizon_minutes=5, process_noise=0.01, measurement_noise=0.1):
         self.min_samples = min_samples
         self.horizon_minutes = horizon_minutes  # Fixed at 5 minutes
         self.kf = None
+
+        # Tunable parameters (can be adjusted by adaptive tuning)
+        self.process_noise = process_noise
+        self.measurement_noise = measurement_noise
 
     def _extract_prices(self, historial):
         """Extract price array from historial deque."""
@@ -141,8 +145,11 @@ class GGALForecaster:
         return np.array([p['price'] for p in historial])
 
     def _initialize_filter(self, prices):
-        """Initialize and train Kalman filter with historical data."""
-        self.kf = KalmanFilter(process_noise=0.01, measurement_noise=0.1)
+        """Initialize and train Kalman filter with historical data using current parameters."""
+        self.kf = KalmanFilter(
+            process_noise=self.process_noise,
+            measurement_noise=self.measurement_noise
+        )
 
         # Feed all historical prices to the filter
         for price in prices:

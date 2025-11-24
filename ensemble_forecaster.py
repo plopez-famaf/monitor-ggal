@@ -14,18 +14,29 @@ class EnsembleForecaster:
     Uses weighted average based on model performance.
     """
 
-    def __init__(self, min_samples=30, horizon_minutes=5):
+    def __init__(self, min_samples=30, horizon_minutes=5, process_noise=0.01, measurement_noise=0.1):
         """
         Initialize ensemble forecaster.
 
         Args:
             min_samples: Minimum data points needed
             horizon_minutes: Forecast horizon in minutes
+            process_noise: Kalman Filter process noise (default: 0.01)
+            measurement_noise: Kalman Filter measurement noise (default: 0.1)
         """
-        self.kalman = GGALForecaster(min_samples=10, horizon_minutes=horizon_minutes)
+        self.kalman = GGALForecaster(
+            min_samples=10,
+            horizon_minutes=horizon_minutes,
+            process_noise=process_noise,
+            measurement_noise=measurement_noise
+        )
         self.automl = AutoMLForecaster(min_samples=min_samples, horizon_minutes=horizon_minutes)
         self.min_samples = min_samples
         self.horizon_minutes = horizon_minutes
+
+        # Store parameters for updates (expose for adaptive tuning)
+        self.process_noise = process_noise
+        self.measurement_noise = measurement_noise
 
         # Default weights (can be adjusted based on effectiveness index)
         self.kalman_weight = 0.4

@@ -55,6 +55,7 @@ El sistema ahora incluye un **Índice de Efectividad (0-100)** que mide la calid
 | `forecast` | `f` | Show current 5-min forecast (auto-generated) |
 | `signal` | `sig` | Trading signal (BUY/SELL/HOLD) |
 | `accuracy` | `acc` | Detailed effectiveness index breakdown |
+| `alert_stats` | - | **NEW**: Alert accuracy statistics |
 | `stats` | - | Statistics (max, min, avg, range) |
 | `metrics` | `m` | Same as accuracy |
 | `history` | `h` | Recent price history (last 10) |
@@ -78,6 +79,13 @@ The system now runs **continuous forecasting** in the background:
 ```bash
 # Configure forecast interval (default: 30 seconds)
 export FORECAST_INTERVAL=30
+
+# Configure alert threshold (default: 0.1%)
+export ALERT_THRESHOLD=0.1
+
+# Enable/disable adaptive tuning (default: true)
+export ADAPTIVE_TUNING=true
+
 python cli.py
 ```
 
@@ -304,6 +312,102 @@ El Ensemble combina:
 2. **Auto-ARIMA** (60% peso): Adaptativo, encuentra mejor orden (p,d,q)
 
 Los pesos se pueden ajustar automáticamente basados en effectiveness index.
+
+## Adaptive Parameter Tuning ⭐ NEW
+
+The system now includes **automatic parameter tuning** that learns from alert accuracy:
+
+### How It Works
+
+1. **Tracking**: Every triggered alert is validated after 5 minutes
+2. **Analysis**: System calculates alert accuracy (correct direction + exceeded threshold)
+3. **Auto-adjustment**: After every 10 validated alerts, parameters are automatically tuned:
+   - **Low accuracy (<60%)**: Alert threshold increases by 20% (more conservative)
+   - **Recent decline**: Threshold increases by 10% if recent accuracy drops
+   - **High accuracy (>80%)**: Threshold decreases by 5% (more aggressive)
+4. **Persistence**: Adjusted parameters saved to `~/.robot-ggal/config.json`
+5. **Reuse**: Configuration loaded automatically on next startup
+
+### Alert Accuracy Metrics
+
+Use the new `alert_stats` command to monitor performance:
+
+```
+ggal> alert_stats
+
+Alert Accuracy Statistics
+
+Overall Accuracy: ████████░░ 78.5% (GOOD)
+  ├─ Correct: 11/14 alerts
+  ├─ Recent: 8/10 (last 10 validated)
+  └─ Pending: 3 alerts awaiting validation
+
+┏━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┓
+┃ Symbol┃ Validated ┃ Correct┃ Accuracy ┃
+┡━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━┩
+│ GGAL  │         8 │      6 │   75.0%  │
+│ BTC   │         6 │      5 │   83.3%  │
+└───────┴───────────┴────────┴──────────┘
+
+✓ Alert system performing well
+Current configuration is effective
+```
+
+### Configuration File
+
+Parameters are saved to `~/.robot-ggal/config.json`:
+
+```json
+{
+  "alert_threshold": 0.12,
+  "last_updated": "2025-01-24T14:23:45",
+  "forecaster_params": {
+    "process_noise": 0.01,
+    "measurement_noise": 0.1
+  }
+}
+```
+
+### Disable Adaptive Tuning
+
+If you prefer manual control:
+
+```bash
+export ADAPTIVE_TUNING=false
+python cli.py
+```
+
+Default is **enabled** (`ADAPTIVE_TUNING=true`).
+
+### Tuning Examples
+
+**Scenario 1: Low Accuracy**
+```
+🔧 Auto-Tuning Triggered
+Alert accuracy: 52.3% (recent: 40.0%)
+
+⚠️  Low accuracy detected - increasing alert threshold
+Threshold: 0.10% → 0.12%
+Configuration saved to ~/.robot-ggal/config.json
+```
+
+**Scenario 2: High Accuracy**
+```
+🔧 Auto-Tuning Triggered
+Alert accuracy: 85.7% (recent: 90.0%)
+
+✓ High accuracy - optimizing sensitivity
+Threshold: 0.12% → 0.11%
+Configuration saved to ~/.robot-ggal/config.json
+```
+
+**Scenario 3: Stable**
+```
+🔧 Auto-Tuning Triggered
+Alert accuracy: 75.0% (recent: 80.0%)
+
+✓ Parameters within acceptable range
+```
 
 ## CLI Features
 

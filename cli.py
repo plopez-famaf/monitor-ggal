@@ -8,6 +8,8 @@ import sys
 import time
 import threading
 import warnings
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 from rich.console import Console
 from rich.table import Table
@@ -82,11 +84,23 @@ class MultiSymbolCLI:
         self.forecasting_running = False
         self._forecast_thread = None
 
+        # Alert tracking (separate from general predictions)
+        self.alert_history = []  # List of triggered alerts with validation results
+
+        # Adaptive tuning configuration
+        self.adaptive_tuning_enabled = os.environ.get('ADAPTIVE_TUNING', 'true').lower() in ('true', '1', 'yes')
+        self.config_file = Path.home() / '.robot-ggal' / 'config.json'
+        self.tuning_check_interval = 10  # Check every 10 validated alerts
+        self.last_tuning_check = 0  # Track when we last ran tuning
+
+        # Load saved configuration (if exists)
+        self._load_config()
+
         # Command history and autocomplete
         self.history = InMemoryHistory()
         self.completer = WordCompleter(
             ['status', 's', 'forecast', 'f', 'signal', 'sig', 'accuracy', 'acc',
-             'stats', 'metrics', 'm', 'history', 'h', 'symbols', 'switch', 'sw',
+             'stats', 'metrics', 'm', 'alert_stats', 'history', 'h', 'symbols', 'switch', 'sw',
              'alerts', 'alert', 'model', 'help', 'quit', 'q', 'exit'] +
             list(symbols_config.keys()) + ['kalman', 'automl', 'ensemble'],
             ignore_case=True
@@ -107,6 +121,212 @@ class MultiSymbolCLI:
     def tracker(self):
         """Get current symbol's tracker."""
         return self.trackers[self.current_symbol]
+
+    def _load_config(self):
+        """Load saved configuration from local file."""
+        if not self.config_file.exists():
+            return
+
+        try:
+            with open(self.config_file, 'r') as f:
+                config = json.load(f)
+
+            # Load alert threshold
+            if 'alert_threshold' in config:
+                self.alert_threshold = config['alert_threshold']
+
+            # Load forecaster parameters (if exists)
+            if 'forecaster_params' in config:
+                params = config['forecaster_params']
+                # Apply to all forecasters
+                for forecaster in self.forecasters.values():
+                    if hasattr(forecaster, 'process_noise'):
+                        forecaster.process_noise = params.get('process_noise', 0.01)
+                    if hasattr(forecaster, 'measurement_noise'):
+                        forecaster.measurement_noise = params.get('measurement_noise', 0.1)
+
+            console.print(f"[dim]Loaded configuration from {self.config_file}[/dim]")
+
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load config: {e}[/yellow]")
+
+    def _save_config(self):
+        """Save current configuration to local file."""
+        try:
+            # Create directory if doesn't exist
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
+
+            config = {
+                'alert_threshold': self.alert_threshold,
+                'last_updated': datetime.now().isoformat(),
+                'forecaster_params': {}
+            }
+
+            # Save forecaster parameters (from first forecaster as they're all the same)
+            first_forecaster = next(iter(self.forecasters.values()))
+            if hasattr(first_forecaster, 'process_noise'):
+                config['forecaster_params']['process_noise'] = first_forecaster.process_noise
+            if hasattr(first_forecaster, 'measurement_noise'):
+                config['forecaster_params']['measurement_noise'] = first_forecaster.measurement_noise
+
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            return True
+
+        except Exception as e:
+            console.print(f"[red]Error saving config: {e}[/red]")
+            return False
+
+    def _tune_parameters(self):
+        """Adaptively tune forecaster parameters based on alert and prediction accuracy."""
+        if not self.adaptive_tuning_enabled:
+            return
+
+        # Only tune if we have enough validated alerts
+        validated_alerts = [a for a in self.alert_history if a['validated']]
+        validated_count = len(validated_alerts)
+
+        # Need at least 10 alerts and 10 more since last check
+        if validated_count < 10 or (validated_count - self.last_tuning_check) < self.tuning_check_interval:
+            return
+
+        self.last_tuning_check = validated_count
+
+        # Calculate current alert accuracy
+        correct_count = len([a for a in validated_alerts if a['was_correct']])
+        accuracy = (correct_count / validated_count * 100) if validated_count > 0 else 0
+
+        # Recent accuracy (last 10 alerts)
+        recent_validated = validated_alerts[-10:]
+        recent_correct = len([a for a in recent_validated if a['was_correct']])
+        recent_accuracy = (recent_correct / len(recent_validated) * 100) if recent_validated else 0
+
+        # Get prediction accuracy metrics from tracker
+        prediction_metrics = {}
+        for key, tracker in self.trackers.items():
+            metrics = tracker.get_accuracy_metrics()
+            if metrics['validated_predictions'] >= 3:
+                prediction_metrics[key] = metrics
+
+        console.print(f"\n[bold cyan]🔧 Auto-Tuning Triggered[/bold cyan]")
+        console.print(f"[dim]Alert accuracy: {accuracy:.1f}% (recent: {recent_accuracy:.1f}%)[/dim]")
+
+        # Show prediction metrics if available
+        if prediction_metrics:
+            avg_effectiveness = sum(m['effectiveness_index'] for m in prediction_metrics.values()) / len(prediction_metrics)
+            avg_mape = sum(m['metrics']['mape'] for m in prediction_metrics.values()) / len(prediction_metrics)
+            console.print(f"[dim]Prediction effectiveness: {avg_effectiveness:.1f}/100 (MAPE: {avg_mape:.2f}%)[/dim]")
+
+        # Decision logic for tuning
+        tuned = False
+        model_tuned = False
+
+        # 1. ALERT THRESHOLD TUNING (based on alert accuracy)
+        if accuracy < 60:
+            old_threshold = self.alert_threshold
+            self.alert_threshold = min(self.alert_threshold * 1.2, 2.0)  # Increase by 20%, max 2%
+            console.print(f"[yellow]⚠️  Low alert accuracy - increasing threshold[/yellow]")
+            console.print(f"[dim]Alert threshold: {old_threshold:.2f}% → {self.alert_threshold:.2f}%[/dim]")
+            tuned = True
+
+        elif accuracy >= 70 and recent_accuracy < 50:
+            old_threshold = self.alert_threshold
+            self.alert_threshold = min(self.alert_threshold * 1.1, 2.0)  # Increase by 10%
+            console.print(f"[yellow]⚠️  Recent alert performance decline - adjusting threshold[/yellow]")
+            console.print(f"[dim]Alert threshold: {old_threshold:.2f}% → {self.alert_threshold:.2f}%[/dim]")
+            tuned = True
+
+        elif accuracy >= 80 and self.alert_threshold > 0.05:
+            old_threshold = self.alert_threshold
+            self.alert_threshold = max(self.alert_threshold * 0.95, 0.05)  # Decrease by 5%, min 0.05%
+            console.print(f"[green]✓ High alert accuracy - optimizing sensitivity[/green]")
+            console.print(f"[dim]Alert threshold: {old_threshold:.2f}% → {self.alert_threshold:.2f}%[/dim]")
+            tuned = True
+
+        # 2. MODEL PARAMETER TUNING (based on prediction metrics)
+        if prediction_metrics:
+            # Get first forecaster to read current parameters
+            first_forecaster = next(iter(self.forecasters.values()))
+
+            # Check if it's a Kalman-based or Ensemble forecaster
+            if hasattr(first_forecaster, 'kf') or hasattr(first_forecaster, 'kalman') or hasattr(first_forecaster, 'measurement_noise'):
+                # Get average MAPE and directional accuracy
+                avg_mape = sum(m['metrics']['mape'] for m in prediction_metrics.values()) / len(prediction_metrics)
+                avg_dir_acc = sum(m['metrics']['directional_accuracy'] for m in prediction_metrics.values()) / len(prediction_metrics)
+
+                # Tune Kalman Filter parameters based on prediction error
+                if avg_mape > 1.5:  # High prediction error
+                    # Increase measurement noise (trust measurements more, predictions less)
+                    for forecaster in self.forecasters.values():
+                        # Works for both GGALForecaster and EnsembleForecaster
+                        if hasattr(forecaster, 'measurement_noise'):
+                            if not hasattr(forecaster, 'measurement_noise'):
+                                forecaster.measurement_noise = 0.1  # Default
+                            if not hasattr(forecaster, 'process_noise'):
+                                forecaster.process_noise = 0.01  # Default
+
+                            old_meas = forecaster.measurement_noise
+                            forecaster.measurement_noise = min(forecaster.measurement_noise * 1.15, 0.3)
+
+                            # Update internal Kalman if it's Ensemble
+                            if hasattr(forecaster, 'kalman'):
+                                forecaster.kalman.measurement_noise = forecaster.measurement_noise
+                                forecaster.kalman.process_noise = forecaster.process_noise
+
+                            console.print(f"[yellow]⚠️  High prediction error (MAPE {avg_mape:.2f}%) - adjusting model[/yellow]")
+                            console.print(f"[dim]Measurement noise: {old_meas:.3f} → {forecaster.measurement_noise:.3f} (trust measurements more)[/dim]")
+                            model_tuned = True
+
+                elif avg_mape < 0.5 and avg_dir_acc >= 75:  # Excellent predictions
+                    # Decrease measurement noise (can trust model more)
+                    for forecaster in self.forecasters.values():
+                        if hasattr(forecaster, 'measurement_noise'):
+                            if not hasattr(forecaster, 'measurement_noise'):
+                                forecaster.measurement_noise = 0.1
+                            if not hasattr(forecaster, 'process_noise'):
+                                forecaster.process_noise = 0.01
+
+                            old_meas = forecaster.measurement_noise
+                            forecaster.measurement_noise = max(forecaster.measurement_noise * 0.9, 0.05)
+
+                            # Update internal Kalman if it's Ensemble
+                            if hasattr(forecaster, 'kalman'):
+                                forecaster.kalman.measurement_noise = forecaster.measurement_noise
+                                forecaster.kalman.process_noise = forecaster.process_noise
+
+                            console.print(f"[green]✓ Excellent predictions (MAPE {avg_mape:.2f}%) - optimizing model[/green]")
+                            console.print(f"[dim]Measurement noise: {old_meas:.3f} → {forecaster.measurement_noise:.3f} (trust model more)[/dim]")
+                            model_tuned = True
+
+                elif avg_dir_acc < 55:  # Poor directional accuracy
+                    # Increase process noise (allow more dynamic changes)
+                    for forecaster in self.forecasters.values():
+                        if hasattr(forecaster, 'measurement_noise'):
+                            if not hasattr(forecaster, 'process_noise'):
+                                forecaster.process_noise = 0.01
+                            if not hasattr(forecaster, 'measurement_noise'):
+                                forecaster.measurement_noise = 0.1
+
+                            old_proc = forecaster.process_noise
+                            forecaster.process_noise = min(forecaster.process_noise * 1.25, 0.05)
+
+                            # Update internal Kalman if it's Ensemble
+                            if hasattr(forecaster, 'kalman'):
+                                forecaster.kalman.process_noise = forecaster.process_noise
+                                forecaster.kalman.measurement_noise = forecaster.measurement_noise
+
+                            console.print(f"[yellow]⚠️  Low directional accuracy ({avg_dir_acc:.1f}%) - increasing adaptability[/yellow]")
+                            console.print(f"[dim]Process noise: {old_proc:.3f} → {forecaster.process_noise:.3f} (more dynamic)[/dim]")
+                            model_tuned = True
+
+        # Save configuration if tuned
+        if tuned or model_tuned:
+            if self._save_config():
+                console.print(f"[dim]Configuration saved to {self.config_file}[/dim]")
+            console.print()
+        else:
+            console.print(f"[green]✓ All parameters within acceptable range[/green]\n")
 
     def start(self):
         """Start background monitoring and REPL."""
@@ -169,6 +389,7 @@ class MultiSymbolCLI:
             "acc": self.cmd_accuracy,
             "metrics": self.cmd_metrics,
             "m": self.cmd_metrics,
+            "alert_stats": self.cmd_alert_stats,
             "history": self.cmd_history,
             "h": self.cmd_history,
             "symbols": self.cmd_symbols,
@@ -424,6 +645,107 @@ class MultiSymbolCLI:
         """Show prediction accuracy metrics (alias for accuracy)."""
         self.cmd_accuracy()
 
+    def cmd_alert_stats(self):
+        """Show alert accuracy statistics."""
+        if not self.alert_history:
+            console.print("[yellow]No alerts have been triggered yet[/yellow]")
+            console.print(f"[dim]Current threshold: {self.alert_threshold}% | Status: {'ON' if self.alerts_enabled else 'OFF'}[/dim]")
+            return
+
+        # Filter validated alerts
+        validated_alerts = [a for a in self.alert_history if a['validated']]
+
+        if not validated_alerts:
+            pending = len(self.alert_history)
+            console.print(f"[yellow]{pending} alert(s) pending validation (need 5+ minutes)[/yellow]")
+            console.print("[dim]Alerts are validated 5 minutes after they are triggered[/dim]")
+            return
+
+        # Calculate statistics
+        total_alerts = len(self.alert_history)
+        validated_count = len(validated_alerts)
+        correct_alerts = [a for a in validated_alerts if a['was_correct']]
+        correct_count = len(correct_alerts)
+        accuracy = (correct_count / validated_count * 100) if validated_count > 0 else 0
+
+        # Per-symbol breakdown
+        symbol_stats = {}
+        for alert in validated_alerts:
+            symbol = alert['symbol']
+            if symbol not in symbol_stats:
+                symbol_stats[symbol] = {'total': 0, 'correct': 0}
+            symbol_stats[symbol]['total'] += 1
+            if alert['was_correct']:
+                symbol_stats[symbol]['correct'] += 1
+
+        # Recent performance (last 10 validated)
+        recent_validated = validated_alerts[-10:] if len(validated_alerts) >= 10 else validated_alerts
+        recent_correct = len([a for a in recent_validated if a['was_correct']])
+        recent_accuracy = (recent_correct / len(recent_validated) * 100) if recent_validated else 0
+
+        # Header
+        console.print("\n[bold]Alert Accuracy Statistics[/bold]\n")
+
+        # Visual accuracy bar
+        filled = int(accuracy / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+
+        if accuracy >= 80:
+            acc_color = "bright_green"
+            rating = "EXCELLENT"
+        elif accuracy >= 70:
+            acc_color = "green"
+            rating = "GOOD"
+        elif accuracy >= 60:
+            acc_color = "yellow"
+            rating = "FAIR"
+        else:
+            acc_color = "red"
+            rating = "POOR"
+
+        console.print(f"Overall Accuracy: [{acc_color}]{bar} {accuracy:.1f}% ({rating})[/{acc_color}]")
+        console.print(f"[dim]  ├─ Correct: {correct_count}/{validated_count} alerts[/dim]")
+        console.print(f"[dim]  ├─ Recent: {recent_correct}/{len(recent_validated)} (last 10 validated)[/dim]")
+        console.print(f"[dim]  └─ Pending: {total_alerts - validated_count} alerts awaiting validation[/dim]\n")
+
+        # Per-symbol table
+        if len(symbol_stats) > 1:
+            table = Table(show_header=True, header_style="bold cyan")
+            table.add_column("Symbol", style="cyan")
+            table.add_column("Validated", justify="right")
+            table.add_column("Correct", justify="right")
+            table.add_column("Accuracy", justify="right")
+
+            for symbol, stats in symbol_stats.items():
+                symbol_acc = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                acc_str = f"{symbol_acc:.1f}%"
+
+                if symbol_acc >= 70:
+                    acc_display = f"[green]{acc_str}[/green]"
+                elif symbol_acc >= 50:
+                    acc_display = f"[yellow]{acc_str}[/yellow]"
+                else:
+                    acc_display = f"[red]{acc_str}[/red]"
+
+                table.add_row(
+                    symbol,
+                    str(stats['total']),
+                    str(stats['correct']),
+                    acc_display
+                )
+
+            console.print(table)
+            console.print()
+
+        # Recommendations
+        if accuracy < 60:
+            console.print("[bold yellow]⚠️  Low alert accuracy detected[/bold yellow]")
+            console.print("[dim]Consider adjusting alert threshold or enabling adaptive tuning[/dim]")
+            console.print(f"[dim]Current threshold: {self.alert_threshold}% | Try: 'alerts 0.5' or 'alerts 1.0'[/dim]")
+        elif accuracy >= 80:
+            console.print("[bold green]✓ Alert system performing well[/bold green]")
+            console.print("[dim]Current configuration is effective[/dim]")
+
     def cmd_history(self):
         """Show recent price history."""
         if not self.monitor.historial:
@@ -515,6 +837,7 @@ class MultiSymbolCLI:
   [cyan]forecast[/cyan], [cyan]f[/cyan]        Show current 5-min forecast (auto-generated)
   [cyan]signal[/cyan], [cyan]sig[/cyan]       Trading signal (BUY/SELL/HOLD)
   [cyan]accuracy[/cyan], [cyan]acc[/cyan]     Effectiveness index breakdown
+  [cyan]alert_stats[/cyan]       Alert accuracy statistics
   [cyan]stats[/cyan]             Statistics (max, min, avg)
   [cyan]metrics[/cyan], [cyan]m[/cyan]        Same as accuracy
   [cyan]history[/cyan], [cyan]h[/cyan]        Recent price history
@@ -530,6 +853,13 @@ class MultiSymbolCLI:
   [dim]• Predictions are validated automatically after 5 minutes[/dim]
   [dim]• Alerts trigger when price change exceeds threshold[/dim]
 
+[bold]Adaptive Parameter Tuning:[/bold]
+  [dim]System automatically adjusts alert threshold based on accuracy[/dim]
+  [dim]• Low accuracy (<60%): Threshold increases (more conservative)[/dim]
+  [dim]• High accuracy (>80%): Threshold decreases (more sensitive)[/dim]
+  [dim]• Parameters saved to ~/.robot-ggal/config.json[/dim]
+  [dim]• Disable with: export ADAPTIVE_TUNING=false[/dim]
+
 [bold]Multi-Symbol Support:[/bold]
   [dim]Monitor multiple assets simultaneously with independent forecasters[/dim]
   [dim]• Each symbol has its own Kalman Filter and effectiveness index[/dim]
@@ -540,11 +870,77 @@ class MultiSymbolCLI:
   ggal> switch btc       # Switch to Bitcoin
   btc> status            # Bitcoin price
   btc> forecast          # Bitcoin forecast
+  btc> alert_stats       # Check alert accuracy
   btc> switch ggal       # Back to GGAL
 """
         # Format with actual interval value
         help_text = help_text.replace('{interval}', str(self.forecast_interval))
         console.print(help_text)
+
+    def _validate_alert_accuracy(self):
+        """Validate triggered alerts against actual price movements."""
+        current_time = datetime.now()
+
+        for alert in self.alert_history:
+            # Skip already validated alerts
+            if alert['validated']:
+                continue
+
+            # Check if enough time has passed (5+ minutes)
+            alert_time = datetime.fromisoformat(alert['timestamp'])
+            target_time = datetime.fromisoformat(alert['expiry_time'])
+
+            if current_time < target_time:
+                continue  # Not yet ready to validate
+
+            # Get historical data for this symbol
+            symbol_key = alert['symbol']
+            if symbol_key not in self.monitors:
+                continue
+
+            historial = self.monitors[symbol_key].historial
+            if not historial:
+                continue
+
+            # Find actual price at target time (±30 seconds tolerance)
+            tolerance = timedelta(seconds=30)
+            actual_price = None
+
+            for record in historial:
+                try:
+                    record_time = datetime.fromisoformat(record['timestamp'])
+                    if abs(record_time - target_time) <= tolerance:
+                        actual_price = record['price']
+                        break
+                except (KeyError, ValueError):
+                    continue
+
+            if actual_price is None:
+                continue  # No matching price data found
+
+            # Calculate actual change
+            current_price = alert['current_price']
+            actual_change_pct = ((actual_price - current_price) / current_price) * 100
+
+            # Determine if alert was correct
+            predicted_direction = alert['direction']
+            actual_direction = "↗" if actual_change_pct > 0 else "↘"
+
+            # Alert is "correct" if:
+            # 1. Direction matched
+            # 2. Actual change exceeded threshold
+            direction_match = predicted_direction == actual_direction
+            exceeded_threshold = abs(actual_change_pct) >= alert['threshold']
+            was_correct = direction_match and exceeded_threshold
+
+            # Update alert record
+            alert['validated'] = True
+            alert['actual_price'] = actual_price
+            alert['actual_change_pct'] = actual_change_pct
+            alert['was_correct'] = was_correct
+
+        # After validating alerts, check if we should run adaptive tuning
+        self._tune_parameters()
 
     def _display_single_alert(self, symbol_key, alert_data):
         """Display a single price alert immediately (push notification)."""
@@ -744,9 +1140,6 @@ class MultiSymbolCLI:
 
                             # Validate old predictions
                             validated_count = tracker.validate_predictions(historial)
-                            if validated_count > 0:
-                                # Optionally log validation events
-                                pass
 
                         # Check for alerts
                         if self.alerts_enabled:
@@ -773,8 +1166,29 @@ class MultiSymbolCLI:
                                 # Only trigger if it's a new alert (not already pending)
                                 if key not in self.pending_alerts:
                                     self.pending_alerts[key] = alert_data
+
+                                    # Save to alert history for accuracy tracking
+                                    alert_record = {
+                                        'symbol': key,
+                                        'timestamp': forecast_time.isoformat(),
+                                        'expiry_time': expiry_time.isoformat(),
+                                        'current_price': forecast['current_price'],
+                                        'predicted_price': forecast['prediction'],
+                                        'predicted_change_pct': change_pct,
+                                        'direction': direction,
+                                        'threshold': self.alert_threshold,
+                                        'validated': False,
+                                        'actual_price': None,
+                                        'actual_change_pct': None,
+                                        'was_correct': None  # True if alert was accurate
+                                    }
+                                    self.alert_history.append(alert_record)
+
                                     # Display immediately (push notification)
                                     self._display_single_alert(key, alert_data)
+
+                # Validate alert accuracy (once per cycle, after all symbols)
+                self._validate_alert_accuracy()
 
                 # Sleep until next iteration
                 time.sleep(self.forecast_interval)
