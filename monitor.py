@@ -1,4 +1,7 @@
-"""Stock price monitoring module - extraído de app.py para reutilización."""
+"""
+Multi-symbol price monitoring module.
+Supports stocks (Finnhub) and crypto (Binance).
+"""
 import requests
 import threading
 import time
@@ -10,18 +13,40 @@ import functools
 print = functools.partial(print, flush=True)
 
 
-class MonitorGGAL:
-    """Background daemon that polls Finnhub API for real-time GGAL price."""
+class PriceMonitor:
+    """
+    Universal price monitor supporting multiple assets and APIs.
+    Replaces MonitorGGAL with multi-symbol support.
+    """
 
-    def __init__(self, api_key, symbol="GGAL"):
-        self.api_key = api_key
+    def __init__(self, symbol, api_type='stock', api_key=None):
+        """
+        Initialize monitor for a single symbol.
+
+        Args:
+            symbol: Symbol to monitor (e.g., 'GGAL', 'BTCUSDT')
+            api_type: 'stock' (Finnhub) or 'crypto' (Binance)
+            api_key: API key (required for stocks, optional for crypto)
+        """
         self.symbol = symbol
+        self.api_type = api_type
+        self.api_key = api_key
         self.historial = deque(maxlen=1000)
         self.running = False
         self._thread = None
 
     def obtener_precio(self):
-        """Fetch current price from Finnhub API."""
+        """Fetch current price from appropriate API."""
+        if self.api_type == 'stock':
+            return self._fetch_finnhub()
+        elif self.api_type == 'crypto':
+            return self._fetch_binance()
+        else:
+            print(f"❌ Unknown API type: {self.api_type}")
+            return None
+
+    def _fetch_finnhub(self):
+        """Fetch stock price from Finnhub API."""
         try:
             response = requests.get(
                 "https://finnhub.io/api/v1/quote",
@@ -33,7 +58,7 @@ class MonitorGGAL:
             # Check for API errors
             if "error" in data:
                 if response.status_code == 401:
-                    print(f"❌ API key inválida")
+                    print(f"❌ Finnhub API key inválida")
                 return None
 
             if "c" in data and data["c"] > 0:
@@ -50,7 +75,38 @@ class MonitorGGAL:
                 return None
 
         except Exception as e:
-            print(f"Error obteniendo precio: {e}")
+            print(f"Error obteniendo precio Finnhub: {e}")
+        return None
+
+    def _fetch_binance(self):
+        """Fetch crypto price from Binance Public API."""
+        try:
+            # Use public endpoint (no API key required for price data)
+            response = requests.get(
+                "https://api.binance.com/api/v3/ticker/24hr",
+                params={"symbol": self.symbol},
+                timeout=5
+            )
+
+            if response.status_code != 200:
+                print(f"❌ Binance API error: {response.status_code}")
+                return None
+
+            data = response.json()
+
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "price": float(data.get("lastPrice", 0)),
+                "high": float(data.get("highPrice", 0)),
+                "low": float(data.get("lowPrice", 0)),
+                "open": float(data.get("openPrice", 0)),
+                "volume": float(data.get("volume", 0)),
+                "change": float(data.get("priceChange", 0)),
+                "change_percent": float(data.get("priceChangePercent", 0))
+            }
+
+        except Exception as e:
+            print(f"Error obteniendo precio Binance: {e}")
         return None
 
     def monitorear_background(self, intervalo=10):
@@ -85,3 +141,7 @@ class MonitorGGAL:
     def obtener_historial(self):
         """Get all price history."""
         return list(self.historial)
+
+
+# Backward compatibility alias
+MonitorGGAL = PriceMonitor

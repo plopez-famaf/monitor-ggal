@@ -140,7 +140,7 @@ def trading_signal():
 
 @app.route('/api/prediction-metrics')
 def prediction_metrics():
-    """Get accuracy metrics for predictions."""
+    """Get accuracy metrics for predictions including effectiveness index."""
     # Validate pending predictions first
     prediction_tracker.validate_predictions(monitor.historial)
 
@@ -151,9 +151,37 @@ def prediction_metrics():
     recent = prediction_tracker.get_recent_predictions(limit=10)
 
     return jsonify({
+        'effectiveness_index': metrics.get('effectiveness_index', 0),
+        'rating': metrics.get('rating', 'N/A'),
         'metrics': metrics,
         'recent_predictions': recent,
         'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/effectiveness')
+def effectiveness():
+    """Get effectiveness index (quick endpoint)."""
+    prediction_tracker.validate_predictions(monitor.historial)
+    metrics = prediction_tracker.get_accuracy_metrics()
+
+    if metrics['validated_predictions'] < 3:
+        return jsonify({
+            'effectiveness_index': 0,
+            'rating': 'INSUFFICIENT_DATA',
+            'message': 'Need at least 3 validated predictions',
+            'validated_predictions': metrics['validated_predictions']
+        }), 202
+
+    return jsonify({
+        'effectiveness_index': metrics['effectiveness_index'],
+        'rating': metrics['rating'],
+        'validated_predictions': metrics['validated_predictions'],
+        'total_predictions': metrics['total_predictions'],
+        'components': {
+            'directional_accuracy': metrics['metrics']['directional_accuracy'],
+            'price_accuracy_mape': metrics['metrics']['mape'],
+            'calibration_coverage': metrics['metrics']['interval_coverage']
+        }
     })
 
 if __name__ == '__main__':

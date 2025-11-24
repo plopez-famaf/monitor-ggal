@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GGAL Monitor - REPL CLI Interface
-Minimal boilerplate, maximum performance.
+Multi-Symbol Monitor - REPL CLI Interface
+Supports stocks (Finnhub) and crypto (Binance).
 """
 import os
 import sys
@@ -10,43 +10,87 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Prompt
-from monitor import MonitorGGAL
+from monitor import PriceMonitor
 from forecaster import GGALForecaster
 from prediction_tracker import PredictionTracker
 
 console = Console()
 
 
-class GGALCLI:
-    """Minimal REPL interface for GGAL monitoring."""
+class MultiSymbolCLI:
+    """REPL interface for multi-symbol monitoring."""
 
-    def __init__(self, api_key):
-        self.monitor = MonitorGGAL(api_key=api_key)
-        self.forecaster = GGALForecaster(min_samples=10)
-        self.tracker = PredictionTracker(max_predictions=100)
+    def __init__(self, symbols_config):
+        """
+        Initialize CLI with multiple symbols.
+
+        Args:
+            symbols_config: Dict mapping symbol keys to config dicts
+                Example: {
+                    'GGAL': {'type': 'stock', 'api_key': 'xxx', 'name': 'Banco Galicia ADR'},
+                    'BTC': {'type': 'crypto', 'symbol': 'BTCUSDT', 'name': 'Bitcoin/USDT'}
+                }
+        """
+        self.symbols_config = symbols_config
+        self.monitors = {}
+        self.forecasters = {}
+        self.trackers = {}
         self.running = True
+
+        # Initialize monitors for each symbol
+        for key, config in symbols_config.items():
+            symbol = config.get('symbol', key)  # Use symbol if specified, else key
+            self.monitors[key] = PriceMonitor(
+                symbol=symbol,
+                api_type=config['type'],
+                api_key=config.get('api_key')
+            )
+            self.forecasters[key] = GGALForecaster(min_samples=10)
+            self.trackers[key] = PredictionTracker(max_predictions=100)
+
+        # Start with first symbol
+        self.current_symbol = list(symbols_config.keys())[0]
+
+    @property
+    def monitor(self):
+        """Get current symbol's monitor."""
+        return self.monitors[self.current_symbol]
+
+    @property
+    def forecaster(self):
+        """Get current symbol's forecaster."""
+        return self.forecasters[self.current_symbol]
+
+    @property
+    def tracker(self):
+        """Get current symbol's tracker."""
+        return self.trackers[self.current_symbol]
 
     def start(self):
         """Start background monitoring and REPL."""
-        console.print("\n[bold cyan]GGAL Monitor CLI[/bold cyan] - Kalman Filter Forecasting\n")
+        console.print("\n[bold cyan]Multi-Symbol Monitor CLI[/bold cyan] - Kalman Filter Forecasting\n")
 
-        # Start monitoring thread
-        self.monitor.start(intervalo=10)
-        console.print("[dim]Background monitoring started (10s interval)[/dim]")
-        console.print("[dim]Type 'help' for commands, 'quit' to exit[/dim]\n")
+        # Start monitoring threads for all symbols
+        for key, monitor in self.monitors.items():
+            monitor.start(intervalo=10)
+            console.print(f"[dim]Started monitoring {key} ({self.symbols_config[key]['name']})[/dim]")
+
+        console.print("\n[dim]Type 'help' for commands, 'quit' to exit[/dim]\n")
 
         # REPL loop
         while self.running:
             try:
-                cmd = Prompt.ask("[bold green]ggal[/bold green]", default="status").strip().lower()
+                prompt_label = f"[bold green]{self.current_symbol.lower()}[/bold green]"
+                cmd = Prompt.ask(prompt_label, default="status").strip().lower()
                 self.handle_command(cmd)
             except KeyboardInterrupt:
                 console.print("\n[yellow]Use 'quit' to exit[/yellow]")
             except EOFError:
                 self.running = False
 
-        # Cleanup
-        self.monitor.stop()
+        # Cleanup - stop all monitors
+        for monitor in self.monitors.values():
+            monitor.stop()
         console.print("\n[dim]Goodbye![/dim]")
 
     def handle_command(self, cmd):
@@ -63,10 +107,15 @@ class GGALCLI:
             "signal": self.cmd_signal,
             "sig": self.cmd_signal,
             "stats": self.cmd_stats,
+            "accuracy": self.cmd_accuracy,
+            "acc": self.cmd_accuracy,
             "metrics": self.cmd_metrics,
             "m": self.cmd_metrics,
             "history": self.cmd_history,
             "h": self.cmd_history,
+            "symbols": self.cmd_symbols,
+            "switch": lambda: self.cmd_switch(args),
+            "sw": lambda: self.cmd_switch(args),
             "help": self.cmd_help,
             "quit": self.cmd_quit,
             "q": self.cmd_quit,
@@ -81,7 +130,7 @@ class GGALCLI:
             console.print("[dim]Type 'help' for available commands[/dim]")
 
     def cmd_status(self):
-        """Show current price."""
+        """Show current price with effectiveness index."""
         if not self.monitor.historial:
             console.print("[yellow]Waiting for data...[/yellow]")
             return
@@ -103,31 +152,65 @@ class GGALCLI:
             f"[dim]| {timestamp}[/dim]"
         )
 
+        # Show effectiveness index if available
+        self.tracker.validate_predictions(self.monitor.historial)
+        metrics = self.tracker.get_accuracy_metrics()
+
+        if metrics['validated_predictions'] >= 3:
+            effectiveness = metrics['effectiveness_index']
+            rating = metrics['rating']
+
+            # Visual bar (10 blocks)
+            filled = int(effectiveness / 10)
+            bar = "█" * filled + "░" * (10 - filled)
+
+            # Color based on rating
+            if effectiveness >= 80:
+                eff_color = "bright_green"
+            elif effectiveness >= 70:
+                eff_color = "green"
+            elif effectiveness >= 60:
+                eff_color = "yellow"
+            else:
+                eff_color = "red"
+
+            console.print(
+                f"\nPrediction Effectiveness: [{eff_color}]{bar} {effectiveness}/100 ({rating})[/{eff_color}]"
+            )
+
+            m = metrics['metrics']
+            console.print(
+                f"[dim]  ├─ Direction: "
+                f"{m['correct_direction_count']}/{m['total_direction_count']} correct "
+                f"({m['directional_accuracy']:.1f}%)[/dim]"
+            )
+            console.print(
+                f"[dim]  ├─ Accuracy: MAPE {m['mape']:.2f}% "
+                f"({'excellent' if m['mape'] < 0.5 else 'good' if m['mape'] < 1.0 else 'fair'})[/dim]"
+            )
+            console.print(
+                f"[dim]  └─ Calibration: {int(m['interval_coverage'])}% within CI "
+                f"({'optimal' if 90 <= m['interval_coverage'] <= 98 else 'needs tuning'})[/dim]"
+            )
+
     def cmd_forecast(self, args):
-        """Show price forecast."""
+        """Show 5-minute price forecast."""
         if len(self.monitor.historial) < 10:
             console.print("[yellow]Need at least 10 data points[/yellow]")
             return
 
-        # Parse horizon (default 5)
-        horizon = int(args[0]) if args and args[0].isdigit() else 5
-        if horizon not in [1, 5, 10]:
-            console.print("[red]Invalid horizon. Use 1, 5, or 10[/red]")
-            return
+        # Always 5 minutes (ignore args)
+        forecasts = self.forecaster.get_all_forecasts(self.monitor.historial)
 
-        forecasts = self.forecaster.get_all_forecasts(self.monitor.historial, horizons=[horizon])
-        key = f"{horizon}min"
-
-        if key not in forecasts:
+        if '5min' not in forecasts:
             console.print("[red]Forecast failed[/red]")
             return
 
-        pred = forecasts[key]
+        pred = forecasts['5min']
         current = self.monitor.historial[-1]['price']
 
         # Track prediction
-        if horizon == 5:
-            self.tracker.add_prediction(pred)
+        self.tracker.add_prediction(pred)
 
         # Color based on change
         arrow = "↗" if pred['price_change'] >= 0 else "↘"
@@ -139,7 +222,7 @@ class GGALCLI:
         table.add_column(style="dim")
         table.add_column()
 
-        table.add_row("Horizon:", f"[bold]{horizon} min[/bold]")
+        table.add_row("Horizon:", f"[bold]5 min[/bold] (fixed)")
         table.add_row("Current:", f"${current:.2f}")
         table.add_row("Predicted:", f"[bold]{arrow} ${pred['prediction']:.2f}[/bold]")
         table.add_row("Change:", f"[{color}]{sign}{pred['price_change']:.2f} ({sign}{pred['price_change_pct']:.2f}%)[/{color}]")
@@ -196,33 +279,64 @@ class GGALCLI:
 
         console.print(table)
 
-    def cmd_metrics(self):
-        """Show prediction accuracy metrics."""
+    def cmd_accuracy(self):
+        """Show detailed effectiveness index breakdown."""
         # Validate pending predictions
         self.tracker.validate_predictions(self.monitor.historial)
 
         metrics = self.tracker.get_accuracy_metrics()
 
-        if metrics['validated_predictions'] == 0:
-            console.print("[yellow]No validated predictions yet (need 5+ minutes)[/yellow]")
+        if metrics['validated_predictions'] < 3:
+            console.print("[yellow]Need at least 3 validated predictions (wait ~15 minutes)[/yellow]")
             return
 
+        effectiveness = metrics['effectiveness_index']
+        rating = metrics['rating']
         m = metrics['metrics']
 
-        # Build table
-        table = Table.grid(padding=(0, 2))
-        table.add_column(style="dim")
-        table.add_column()
+        # Header with big effectiveness score
+        filled = int(effectiveness / 10)
+        bar = "█" * filled + "░" * (10 - filled)
 
-        table.add_row("Total predictions:", f"{metrics['total_predictions']}")
-        table.add_row("Validated:", f"{metrics['validated_predictions']}")
-        table.add_row("Directional accuracy:", f"[bold]{m['directional_accuracy']:.1f}%[/bold]")
-        table.add_row("MAPE:", f"{m['mape']:.2f}%")
-        table.add_row("MAE:", f"${m['mae']:.3f}")
-        table.add_row("IC 95% coverage:", f"{m['interval_coverage']:.1f}%")
-        table.add_row("Evaluation:", f"[bold]{metrics['summary']}[/bold]")
+        if effectiveness >= 80:
+            eff_color = "bright_green"
+        elif effectiveness >= 70:
+            eff_color = "green"
+        elif effectiveness >= 60:
+            eff_color = "yellow"
+        else:
+            eff_color = "red"
 
-        console.print(table)
+        console.print(f"\n[bold]Prediction Effectiveness Index[/bold]")
+        console.print(f"[{eff_color}]{bar} {effectiveness}/100 ({rating})[/{eff_color}]\n")
+
+        # Component breakdown
+        console.print("[bold]Component Scores:[/bold]")
+
+        # Direction
+        dir_acc = m['directional_accuracy']
+        dir_color = "green" if dir_acc >= 70 else "yellow" if dir_acc >= 60 else "red"
+        console.print(f"  [{dir_color}]▸ Direction:[/{dir_color}] {dir_acc:.1f}% "
+                     f"({m['correct_direction_count']}/{m['total_direction_count']} correct)")
+
+        # Price accuracy
+        mape = m['mape']
+        price_color = "green" if mape < 0.5 else "yellow" if mape < 1.0 else "red"
+        console.print(f"  [{price_color}]▸ Price Accuracy:[/{price_color}] MAPE {mape:.2f}% "
+                     f"(MAE ${m['mae']:.3f})")
+
+        # Calibration
+        coverage = m['interval_coverage']
+        cal_color = "green" if 90 <= coverage <= 98 else "yellow" if 85 <= coverage <= 99 else "red"
+        console.print(f"  [{cal_color}]▸ Calibration:[/{cal_color}] {coverage:.1f}% within 95% CI")
+
+        # Summary
+        console.print(f"\n[dim]{metrics['summary']}[/dim]")
+        console.print(f"[dim]Based on {metrics['validated_predictions']} validated predictions (5-min horizon)[/dim]")
+
+    def cmd_metrics(self):
+        """Show prediction accuracy metrics (alias for accuracy)."""
+        self.cmd_accuracy()
 
     def cmd_history(self):
         """Show recent price history."""
@@ -252,24 +366,88 @@ class GGALCLI:
 
         console.print(table)
 
+    def cmd_symbols(self):
+        """Show available symbols."""
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Key", style="cyan")
+        table.add_column("Symbol", style="white")
+        table.add_column("Name", style="dim")
+        table.add_column("Type", justify="center")
+        table.add_column("Status", justify="center")
+
+        for key, config in self.symbols_config.items():
+            symbol = config.get('symbol', key)
+            name = config['name']
+            api_type = config['type']
+            monitor = self.monitors[key]
+
+            # Check if has data
+            status = "✓" if len(monitor.historial) > 0 else "⏳"
+            status_color = "green" if len(monitor.historial) > 0 else "yellow"
+
+            # Highlight current symbol
+            if key == self.current_symbol:
+                key_display = f"[bold]{key} ◄[/bold]"
+            else:
+                key_display = key
+
+            table.add_row(
+                key_display,
+                symbol,
+                name,
+                api_type,
+                f"[{status_color}]{status}[/{status_color}]"
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Current: {self.current_symbol} | Use 'switch <key>' to change[/dim]")
+
+    def cmd_switch(self, args):
+        """Switch to different symbol."""
+        if not args:
+            console.print("[yellow]Usage: switch <symbol_key>[/yellow]")
+            console.print(f"[dim]Available: {', '.join(self.symbols_config.keys())}[/dim]")
+            return
+
+        target = args[0].upper()
+
+        if target not in self.symbols_config:
+            console.print(f"[red]Unknown symbol: {target}[/red]")
+            console.print(f"[dim]Available: {', '.join(self.symbols_config.keys())}[/dim]")
+            return
+
+        self.current_symbol = target
+        config = self.symbols_config[target]
+        console.print(f"[green]Switched to {target}[/green] ({config['name']})")
+
     def cmd_help(self):
         """Show help."""
         help_text = """
 [bold]Available commands:[/bold]
 
-  [cyan]status[/cyan], [cyan]s[/cyan]          Current price
-  [cyan]forecast [1|5|10][/cyan]  Price forecast (default: 5 min)
+  [cyan]status[/cyan], [cyan]s[/cyan]          Current price + effectiveness index
+  [cyan]forecast[/cyan], [cyan]f[/cyan]        5-minute price forecast (Kalman Filter)
   [cyan]signal[/cyan], [cyan]sig[/cyan]       Trading signal (BUY/SELL/HOLD)
+  [cyan]accuracy[/cyan], [cyan]acc[/cyan]     Effectiveness index breakdown
   [cyan]stats[/cyan]             Statistics (max, min, avg)
-  [cyan]metrics[/cyan], [cyan]m[/cyan]        Model accuracy metrics
+  [cyan]metrics[/cyan], [cyan]m[/cyan]        Same as accuracy
   [cyan]history[/cyan], [cyan]h[/cyan]        Recent price history
+  [cyan]symbols[/cyan]           List available symbols
+  [cyan]switch[/cyan], [cyan]sw[/cyan]        Switch to different symbol
   [cyan]help[/cyan]              Show this help
   [cyan]quit[/cyan], [cyan]q[/cyan]           Exit
 
+[bold]Multi-Symbol Support:[/bold]
+  [dim]Monitor multiple assets simultaneously with independent forecasters[/dim]
+  [dim]• Each symbol has its own Kalman Filter and effectiveness index[/dim]
+  [dim]• Switch between symbols without losing data[/dim]
+
 [dim]Examples:[/dim]
-  ggal> status
-  ggal> forecast 10
-  ggal> signal
+  ggal> symbols          # List all symbols
+  ggal> switch btc       # Switch to Bitcoin
+  btc> status            # Bitcoin price
+  btc> forecast          # Bitcoin forecast
+  btc> switch ggal       # Back to GGAL
 """
         console.print(help_text)
 
@@ -280,15 +458,36 @@ class GGALCLI:
 
 def main():
     """Entry point."""
-    api_key = os.environ.get('FINNHUB_API_KEY')
+    finnhub_key = os.environ.get('FINNHUB_API_KEY')
+    binance_key = os.environ.get('BINANCE_API_KEY')  # Optional
 
-    if not api_key:
+    # Configure symbols
+    symbols_config = {
+        'GGAL': {
+            'type': 'stock',
+            'api_key': finnhub_key,
+            'name': 'Banco Galicia ADR'
+        }
+    }
+
+    # Add BTC if user wants it (optional)
+    if os.environ.get('ENABLE_CRYPTO', '').lower() in ('true', '1', 'yes'):
+        symbols_config['BTC'] = {
+            'type': 'crypto',
+            'symbol': 'BTCUSDT',
+            'api_key': binance_key,  # Not required for public endpoints
+            'name': 'Bitcoin / USDT'
+        }
+
+    # Validate we have at least Finnhub key
+    if not finnhub_key:
         console.print("[bold red]Error:[/bold red] FINNHUB_API_KEY not set")
         console.print("\n[dim]Get a free API key at: https://finnhub.io[/dim]")
-        console.print("[dim]Then run: export FINNHUB_API_KEY='your_key'[/dim]\n")
+        console.print("[dim]Then run: export FINNHUB_API_KEY='your_key'[/dim]")
+        console.print("\n[dim]To enable crypto: export ENABLE_CRYPTO=true[/dim]\n")
         sys.exit(1)
 
-    cli = GGALCLI(api_key=api_key)
+    cli = MultiSymbolCLI(symbols_config=symbols_config)
     cli.start()
 
 

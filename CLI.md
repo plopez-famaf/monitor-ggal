@@ -1,6 +1,6 @@
 # GGAL Monitor - CLI Interface
 
-**Interfaz REPL minimalista para monitoreo de GGAL con Kalman Filter forecasting.**
+**Interfaz REPL minimalista para monitoreo de GGAL con Kalman Filter forecasting y validación de predicciones.**
 
 ## Quick Start
 
@@ -28,37 +28,74 @@ Type 'help' for commands, 'quit' to exit
 ggal> _
 ```
 
+## Effectiveness Index ⭐ NEW
+
+El sistema ahora incluye un **Índice de Efectividad (0-100)** que mide la calidad de las predicciones en tiempo real:
+
+- **Directional Accuracy (33.3%)**: ¿Predijimos correctamente si el precio subiría/bajaría?
+- **Price Accuracy (33.3%)**: ¿Qué tan cerca estuvo el precio predicho del real? (basado en MAPE)
+- **Calibration (33.3%)**: ¿El precio real cayó dentro del intervalo de confianza 95%?
+
+**Ratings:**
+- 80-100: EXCELLENT
+- 70-79: GOOD
+- 60-69: FAIR
+- 50-59: POOR
+- 0-49: VERY POOR
+
 ### Available Commands
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `status` | `s` | Current price and change |
-| `forecast [1\|5\|10]` | `f` | Price forecast (default: 5 min) |
+| `status` | `s` | Current price + effectiveness index |
+| `forecast` | `f` | 5-minute price forecast (fixed horizon) |
 | `signal` | `sig` | Trading signal (BUY/SELL/HOLD) |
+| `accuracy` | `acc` | Detailed effectiveness index breakdown |
 | `stats` | - | Statistics (max, min, avg, range) |
-| `metrics` | `m` | Model accuracy metrics |
+| `metrics` | `m` | Same as accuracy |
 | `history` | `h` | Recent price history (last 10) |
 | `help` | - | Show help |
 | `quit` | `q` | Exit |
 
 ### Examples
 
-**Check current price:**
+**Check current price with effectiveness:**
 ```
 ggal> status
 ↗ $45.67 +0.34 (+0.75%) | 14:23:45
+
+Prediction Effectiveness: ████████░░ 82/100 (GOOD)
+  ├─ Direction: 15/20 correct (75.0%)
+  ├─ Accuracy: MAPE 0.34% (excellent)
+  └─ Calibration: 90% within CI (optimal)
 ```
 
-**Get 10-minute forecast:**
+**Get 5-minute forecast:**
 ```
-ggal> forecast 10
-Horizon:   10 min
+ggal> forecast
+Horizon:   5 min (fixed)
 Current:   $45.67
 Predicted: ↗ $45.92
 Change:    +0.25 (+0.55%)
 Velocity:  0.0025 $/min
 IC 95%:    $45.68 - $46.16
 Trend:     UP
+```
+
+**Effectiveness index breakdown:**
+```
+ggal> accuracy
+
+Prediction Effectiveness Index
+████████░░ 82/100 (GOOD)
+
+Component Scores:
+  ▸ Direction: 75.0% (15/20 correct)
+  ▸ Price Accuracy: MAPE 0.34% (MAE $0.015)
+  ▸ Calibration: 90.0% within 95% CI
+
+Good: Reliable predictions
+Based on 20 validated predictions (5-min horizon)
 ```
 
 **Trading signal:**
@@ -78,16 +115,10 @@ Avg:      $45.23
 Range:    $1.23
 ```
 
-**Model accuracy:**
+**Model accuracy (alias for 'accuracy'):**
 ```
 ggal> metrics
-Total predictions:      50
-Validated:              47
-Directional accuracy:   73.5%
-MAPE:                   0.24%
-MAE:                    $0.011
-IC 95% coverage:        94.2%
-Evaluation:             Good performance
+(Same output as 'accuracy' command)
 ```
 
 **Price history:**

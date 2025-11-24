@@ -147,13 +147,14 @@ class PredictionTracker:
         Calculate accuracy metrics from validated predictions.
 
         Returns:
-            Dict with accuracy statistics
+            Dict with accuracy statistics including effectiveness index
         """
         if not self.validated_predictions:
             return {
                 'total_predictions': 0,
                 'validated_predictions': 0,
-                'metrics': None
+                'metrics': None,
+                'effectiveness_index': 0
             }
 
         validated_list = list(self.validated_predictions)
@@ -165,7 +166,8 @@ class PredictionTracker:
             return {
                 'total_predictions': len(self.predictions),
                 'validated_predictions': 0,
-                'metrics': None
+                'metrics': None,
+                'effectiveness_index': 0
             }
 
         # Calculate error metrics
@@ -188,23 +190,96 @@ class PredictionTracker:
         # Confidence interval coverage (95% should be within bounds)
         interval_coverage = (sum(within_intervals) / len(within_intervals)) * 100 if within_intervals else 0
 
-        # Recent performance (last 10 predictions)
-        recent_errors = error_pcts[-10:] if len(error_pcts) >= 10 else error_pcts
+        # Recent performance (last 20 predictions for 5-min focus)
+        recent_errors = error_pcts[-20:] if len(error_pcts) >= 20 else error_pcts
         recent_mape = np.mean(np.abs(recent_errors)) if recent_errors else 0
+
+        # EFFECTIVENESS INDEX (0-100)
+        effectiveness_index = self._calculate_effectiveness_index(
+            directional_accuracy, mape, interval_coverage
+        )
 
         return {
             'total_predictions': len(self.predictions),
             'validated_predictions': len(validated_list),
+            'effectiveness_index': effectiveness_index,
             'metrics': {
                 'mae': round(mae, 3),  # Mean Absolute Error ($)
                 'rmse': round(rmse, 3),  # Root Mean Squared Error ($)
                 'mape': round(mape, 2),  # Mean Absolute Percentage Error (%)
                 'directional_accuracy': round(directional_accuracy, 1),  # % correct direction
                 'interval_coverage': round(interval_coverage, 1),  # % within 95% CI
-                'recent_mape': round(recent_mape, 2),  # Recent 10 predictions MAPE
+                'recent_mape': round(recent_mape, 2),  # Recent 20 predictions MAPE
+                'correct_direction_count': correct_direction,
+                'total_direction_count': len(errors)
             },
-            'summary': self._generate_summary(directional_accuracy, mape, interval_coverage)
+            'summary': self._generate_summary(directional_accuracy, mape, interval_coverage),
+            'rating': self._get_effectiveness_rating(effectiveness_index)
         }
+
+    def _calculate_effectiveness_index(self, dir_acc, mape, coverage):
+        """
+        Calculate Effectiveness Index (0-100).
+
+        Components (equal weight):
+        1. Directional Accuracy (0-100)
+        2. Price Accuracy based on MAPE (0-100)
+        3. Confidence Calibration (0-100)
+
+        Args:
+            dir_acc: Directional accuracy percentage (0-100)
+            mape: Mean Absolute Percentage Error
+            coverage: Confidence interval coverage percentage (0-100)
+
+        Returns:
+            Effectiveness index (0-100)
+        """
+        # Component 1: Directional Accuracy (already 0-100)
+        direction_score = dir_acc
+
+        # Component 2: Price Accuracy (inverse of MAPE, normalized)
+        # MAPE < 0.5% = 100 points
+        # MAPE > 2.0% = 0 points
+        # Linear interpolation in between
+        if mape <= 0.5:
+            price_score = 100
+        elif mape >= 2.0:
+            price_score = 0
+        else:
+            # Linear scale: 0.5% -> 100, 2.0% -> 0
+            price_score = 100 - ((mape - 0.5) / (2.0 - 0.5)) * 100
+
+        # Component 3: Confidence Calibration
+        # Ideal is 95% coverage (matching 95% CI)
+        # Penalize both over and under
+        if 90 <= coverage <= 98:
+            calibration_score = 100
+        elif coverage < 90:
+            # Under-confident: linear penalty
+            calibration_score = (coverage / 90) * 100
+        else:
+            # Over-confident: linear penalty
+            calibration_score = 100 - ((coverage - 98) / 2)
+
+        calibration_score = max(0, min(100, calibration_score))
+
+        # Equal weighting (can be adjusted)
+        effectiveness = (direction_score + price_score + calibration_score) / 3
+
+        return round(effectiveness, 1)
+
+    def _get_effectiveness_rating(self, index):
+        """Convert effectiveness index to rating."""
+        if index >= 80:
+            return 'EXCELLENT'
+        elif index >= 70:
+            return 'GOOD'
+        elif index >= 60:
+            return 'FAIR'
+        elif index >= 50:
+            return 'POOR'
+        else:
+            return 'VERY POOR'
 
     def _generate_summary(self, dir_acc, mape, coverage):
         """Generate human-readable summary of performance."""
