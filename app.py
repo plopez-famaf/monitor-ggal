@@ -30,7 +30,7 @@ if not api_key:
     print("=" * 60)
     api_key = "demo"
 
-monitor = MonitorGGAL(api_key=api_key)
+monitor = MonitorGGAL(symbol="GGAL", api_type='stock', api_key=api_key)
 forecaster = GGALForecaster(min_samples=10)
 prediction_tracker = PredictionTracker(max_predictions=100)
 
