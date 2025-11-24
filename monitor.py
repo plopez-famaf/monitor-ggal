@@ -58,12 +58,29 @@ class PriceMonitor:
                 params={"symbol": self.symbol, "token": self.api_key},
                 timeout=5
             )
-            data = response.json()
+
+            # Check HTTP status before parsing JSON
+            if response.status_code == 401:
+                self._handle_error(f"[{self.symbol}] Finnhub API key inválida (401)")
+                return None
+            elif response.status_code == 429:
+                self._handle_error(f"[{self.symbol}] Finnhub rate limit exceeded (429)")
+                return None
+            elif response.status_code != 200:
+                self._handle_error(f"[{self.symbol}] Finnhub HTTP {response.status_code}")
+                return None
+
+            # Try to parse JSON
+            try:
+                data = response.json()
+            except ValueError as e:
+                # JSONDecodeError is a subclass of ValueError
+                self._handle_error(f"[{self.symbol}] Finnhub invalid response (not JSON): {response.text[:100]}")
+                return None
 
             # Check for API errors
             if "error" in data:
-                if response.status_code == 401:
-                    print(f"❌ [{self.symbol}] Finnhub API key inválida")
+                self._handle_error(f"[{self.symbol}] Finnhub API error: {data.get('error', 'unknown')}")
                 return None
 
             if "c" in data and data["c"] > 0:
@@ -79,11 +96,12 @@ class PriceMonitor:
                     "change_percent": round((data.get("c", 0) - data.get("pc", 0)) / data.get("pc", 1) * 100, 2)
                 }
             elif "c" in data and data["c"] == 0:
+                # Market closed or no trading
                 return None
 
         except requests.exceptions.Timeout:
             self._handle_error(f"[{self.symbol}] Finnhub timeout (5s) - red congestionada o servidor lento")
-        except requests.exceptions.ConnectionError as e:
+        except requests.exceptions.ConnectionError:
             self._handle_error(f"[{self.symbol}] Finnhub connection error - verificar internet")
         except requests.exceptions.RequestException as e:
             self._handle_error(f"[{self.symbol}] Finnhub request error: {type(e).__name__}")

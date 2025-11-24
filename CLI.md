@@ -58,7 +58,10 @@ El sistema ahora incluye un **Índice de Efectividad (0-100)** que mide la calid
 | `stats` | - | Statistics (max, min, avg, range) |
 | `metrics` | `m` | Same as accuracy |
 | `history` | `h` | Recent price history (last 10) |
+| `symbols` | - | List all available symbols |
+| `switch` | `sw` | Switch between symbols (e.g., `sw btc`) |
 | `alerts` | - | Configure price alerts (on/off/threshold) |
+| `model` | - | Switch forecasting model (kalman/automl) |
 | `help` | - | Show help |
 | `quit` | `q` | Exit |
 
@@ -200,6 +203,47 @@ ggal> history
 └──────────┴────────┴───────────────────┘
 ```
 
+**Multi-symbol switching:**
+```
+ggal> symbols
+Available Symbols:
+  • GGAL - Banco Galicia ADR (stock)
+  • BTC - Bitcoin / USDT (crypto)
+
+ggal> switch btc
+Switched to BTC (Bitcoin / USDT)
+
+btc> status
+↗ $43,521.45 +234.12 (+0.54%) | 14:23:45
+
+btc> forecast
+(Shows Bitcoin forecast)
+
+btc> sw ggal
+Switched to GGAL (Banco Galicia ADR)
+```
+
+**Model switching (runtime):**
+```
+ggal> model
+Current Model: Kalman Filter
+
+Usage:
+  model kalman  - Use Kalman Filter only (fast, lightweight)
+  model automl  - Use Ensemble (Kalman + Auto-ARIMA)
+
+ggal> model automl
+✓ Switched to AutoML Ensemble
+Combines Kalman + Auto-ARIMA (30+ samples needed)
+
+ggal> forecast
+(Now using ensemble model)
+
+ggal> model kalman
+✓ Switched to Kalman Filter
+Fast, lightweight forecasting (10+ samples needed)
+```
+
 ## AutoML Mode (Optional)
 
 El sistema incluye un modo **AutoML** que utiliza Auto-ARIMA para selección automática de parámetros:
@@ -221,10 +265,22 @@ El sistema incluye un modo **AutoML** que utiliza Auto-ARIMA para selección aut
 
 ### Activación
 
+**Opción 1: Durante runtime (recomendado)**
+```bash
+# Inicia con Kalman (default)
+python cli.py
+
+ggal> model automl     # Cambia a AutoML
+ggal> model kalman     # Vuelve a Kalman
+```
+
+**Opción 2: Al iniciar**
 ```bash
 export USE_AUTOML=true
 python cli.py
 ```
+
+**Ventaja del comando `model`:** Puedes cambiar entre modelos sin reiniciar, comparar resultados en tiempo real.
 
 ### Componentes del Ensemble
 

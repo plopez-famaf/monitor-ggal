@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import threading
+import warnings
 from datetime import datetime
 from rich.console import Console
 from rich.table import Table
@@ -17,6 +18,10 @@ from prompt_toolkit.history import InMemoryHistory
 from monitor import PriceMonitor
 from forecaster import GGALForecaster
 from prediction_tracker import PredictionTracker
+
+# Suppress pmdarima warnings (constant series, parallel fitting)
+warnings.filterwarnings('ignore', message='Input time-series is completely constant')
+warnings.filterwarnings('ignore', message='stepwise model cannot be fit in parallel')
 
 console = Console()
 
@@ -82,7 +87,8 @@ class MultiSymbolCLI:
         self.completer = WordCompleter(
             ['status', 's', 'forecast', 'f', 'signal', 'sig', 'accuracy', 'acc',
              'stats', 'metrics', 'm', 'history', 'h', 'symbols', 'switch', 'sw',
-             'alerts', 'alert', 'help', 'quit', 'q', 'exit'] + list(symbols_config.keys()),
+             'alerts', 'alert', 'model', 'help', 'quit', 'q', 'exit'] +
+            list(symbols_config.keys()) + ['kalman', 'automl', 'ensemble'],
             ignore_case=True
         )
         self.session = PromptSession(history=self.history, completer=self.completer)
@@ -170,6 +176,7 @@ class MultiSymbolCLI:
             "sw": lambda: self.cmd_switch(args),
             "alerts": lambda: self.cmd_alerts(args),
             "alert": lambda: self.cmd_alerts(args),
+            "model": lambda: self.cmd_model(args),
             "help": self.cmd_help,
             "quit": self.cmd_quit,
             "q": self.cmd_quit,
@@ -514,6 +521,7 @@ class MultiSymbolCLI:
   [cyan]symbols[/cyan]           List available symbols
   [cyan]switch[/cyan], [cyan]sw[/cyan]        Switch to different symbol
   [cyan]alerts[/cyan]            Configure price alerts (on/off/threshold)
+  [cyan]model[/cyan]             Switch forecasting model (kalman/automl)
   [cyan]help[/cyan]              Show this help
   [cyan]quit[/cyan], [cyan]q[/cyan]           Exit
 
@@ -635,6 +643,59 @@ class MultiSymbolCLI:
             except ValueError:
                 console.print("[red]Invalid command. Use: alerts on/off/NUMBER[/red]")
 
+    def cmd_model(self, args):
+        """Switch forecasting model: kalman or automl."""
+        if not args:
+            # Show current model
+            model_name = "Ensemble (Kalman + Auto-ARIMA)" if self.use_automl else "Kalman Filter"
+            console.print(f"\n[bold]Current Model:[/bold] {model_name}")
+            console.print(f"\n[dim]Usage:[/dim]")
+            console.print(f"  [cyan]model kalman[/cyan]  - Use Kalman Filter only (fast, lightweight)")
+            console.print(f"  [cyan]model automl[/cyan]  - Use Ensemble (Kalman + Auto-ARIMA)")
+            return
+
+        target = args[0].lower()
+
+        if target in ('kalman', 'kf'):
+            if not self.use_automl:
+                console.print("[yellow]Already using Kalman Filter[/yellow]")
+                return
+
+            # Switch to Kalman Filter
+            self.use_automl = False
+            from forecaster import GGALForecaster
+
+            for key in self.forecasters:
+                self.forecasters[key] = GGALForecaster(min_samples=10)
+
+            # Clear forecasts (will regenerate with new model)
+            self.last_forecasts.clear()
+
+            console.print("[green]✓ Switched to Kalman Filter[/green]")
+            console.print("[dim]Fast, lightweight forecasting (10+ samples needed)[/dim]")
+
+        elif target in ('automl', 'ensemble', 'auto'):
+            if self.use_automl:
+                console.print("[yellow]Already using AutoML Ensemble[/yellow]")
+                return
+
+            # Switch to AutoML Ensemble
+            self.use_automl = True
+            from ensemble_forecaster import EnsembleForecaster
+
+            for key in self.forecasters:
+                self.forecasters[key] = EnsembleForecaster(min_samples=30)
+
+            # Clear forecasts (will regenerate with new model)
+            self.last_forecasts.clear()
+
+            console.print("[green]✓ Switched to AutoML Ensemble[/green]")
+            console.print("[dim]Combines Kalman + Auto-ARIMA (30+ samples needed)[/dim]")
+
+        else:
+            console.print(f"[red]Unknown model:[/red] {target}")
+            console.print("[dim]Available: kalman, automl[/dim]")
+
     def cmd_quit(self):
         """Exit REPL."""
         self.running = False
@@ -719,23 +780,20 @@ def main():
     finnhub_key = os.environ.get('FINNHUB_API_KEY')
     binance_key = os.environ.get('BINANCE_API_KEY')  # Optional
 
-    # Configure symbols
+    # Configure symbols (both enabled by default)
     symbols_config = {
         'GGAL': {
             'type': 'stock',
             'api_key': finnhub_key,
             'name': 'Banco Galicia ADR'
-        }
-    }
-
-    # Add BTC if user wants it (optional)
-    if os.environ.get('ENABLE_CRYPTO', '').lower() in ('true', '1', 'yes'):
-        symbols_config['BTC'] = {
+        },
+        'BTC': {
             'type': 'crypto',
             'symbol': 'BTCUSDT',
             'api_key': binance_key,  # Not required for public endpoints
             'name': 'Bitcoin / USDT'
         }
+    }
 
     # Validate we have at least Finnhub key
     if not finnhub_key:
