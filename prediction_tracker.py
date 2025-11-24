@@ -35,14 +35,18 @@ class PredictionTracker:
         if timestamp is None:
             timestamp = datetime.now()
 
+        # Extract horizon minutes from string like "5min"
+        horizon_str = forecast_data.get('horizon', '5min')
+        horizon_minutes = int(horizon_str.replace('min', ''))
+
         prediction_record = {
             'timestamp': timestamp.isoformat(),
             'current_price': forecast_data['current_price'],
             'predicted_price': forecast_data['prediction'],
-            'horizon_minutes': forecast_data['horizon_minutes'],
+            'horizon_minutes': horizon_minutes,
             'velocity': forecast_data['velocity'],
-            'uncertainty': forecast_data['uncertainty'],
-            'confidence': forecast_data['confidence'],
+            'uncertainty': forecast_data.get('uncertainty', 0),
+            'confidence': forecast_data.get('confidence', 'medium'),
             'lower_bound': forecast_data['lower_bound'],
             'upper_bound': forecast_data['upper_bound'],
             'validated': False,
