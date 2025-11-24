@@ -757,13 +757,17 @@ class MultiSymbolCLI:
 
                         # Check for alerts
                         if self.alerts_enabled:
-                            change_pct = abs(forecast['price_change_pct'])
-                            if change_pct >= self.alert_threshold:
-                                direction = "↗" if forecast['price_change'] > 0 else "↘"
+                            change_pct = forecast['price_change_pct']  # Keep sign
+                            if abs(change_pct) >= self.alert_threshold:
+                                direction = "↗" if change_pct > 0 else "↘"
+                                color = "green" if change_pct > 0 else "red"
                                 self.pending_alerts[key] = {
                                     'forecast': forecast,
                                     'direction': direction,
-                                    'change_pct': change_pct
+                                    'change_pct': change_pct,
+                                    'color': color,
+                                    'current': forecast['current_price'],
+                                    'predicted': forecast['prediction']
                                 }
 
                 # Sleep until next iteration
