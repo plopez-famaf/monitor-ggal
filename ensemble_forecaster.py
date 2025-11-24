@@ -14,13 +14,13 @@ class EnsembleForecaster:
     Uses weighted average based on model performance.
     """
 
-    def __init__(self, min_samples=30, horizon_minutes=5, process_noise=0.01, measurement_noise=0.1):
+    def __init__(self, min_samples=30, horizon_minutes=15, process_noise=0.01, measurement_noise=0.1):
         """
         Initialize ensemble forecaster.
 
         Args:
             min_samples: Minimum data points needed
-            horizon_minutes: Forecast horizon in minutes
+            horizon_minutes: Forecast horizon in minutes (default: 15)
             process_noise: Kalman Filter process noise (default: 0.01)
             measurement_noise: Kalman Filter measurement noise (default: 0.1)
         """
@@ -48,7 +48,7 @@ class EnsembleForecaster:
 
         Args:
             historial: Price history deque
-            horizon_minutes: Forecast horizon (default: 5 minutes)
+            horizon_minutes: Forecast horizon (default: 15 minutes)
 
         Returns:
             dict with ensemble prediction and individual model predictions

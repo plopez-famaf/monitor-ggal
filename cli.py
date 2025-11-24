@@ -80,6 +80,7 @@ class MultiSymbolCLI:
 
         # Continuous forecasting
         self.forecast_interval = int(os.environ.get('FORECAST_INTERVAL', '30'))  # seconds
+        self.forecast_horizon = int(os.environ.get('FORECAST_HORIZON', '15'))  # minutes (default: 15)
         self.last_forecasts = {}  # symbol -> forecast_data
         self.forecasting_running = False
         self._forecast_thread = None
@@ -101,7 +102,7 @@ class MultiSymbolCLI:
         self.completer = WordCompleter(
             ['status', 's', 'forecast', 'f', 'signal', 'sig', 'accuracy', 'acc',
              'stats', 'metrics', 'm', 'alert_stats', 'history', 'h', 'symbols', 'switch', 'sw',
-             'alerts', 'alert', 'model', 'help', 'quit', 'q', 'exit'] +
+             'alerts', 'alert', 'model', 'horizon', 'help', 'quit', 'q', 'exit'] +
             list(symbols_config.keys()) + ['kalman', 'automl', 'ensemble'],
             ignore_case=True
         )
@@ -398,6 +399,7 @@ class MultiSymbolCLI:
             "alerts": lambda: self.cmd_alerts(args),
             "alert": lambda: self.cmd_alerts(args),
             "model": lambda: self.cmd_model(args),
+            "horizon": lambda: self.cmd_horizon(args),
             "help": self.cmd_help,
             "quit": self.cmd_quit,
             "q": self.cmd_quit,
@@ -834,7 +836,7 @@ class MultiSymbolCLI:
 [bold]Available commands:[/bold]
 
   [cyan]status[/cyan], [cyan]s[/cyan]          Current price + effectiveness index
-  [cyan]forecast[/cyan], [cyan]f[/cyan]        Show current 5-min forecast (auto-generated)
+  [cyan]forecast[/cyan], [cyan]f[/cyan]        Show current forecast (auto-generated)
   [cyan]signal[/cyan], [cyan]sig[/cyan]       Trading signal (BUY/SELL/HOLD)
   [cyan]accuracy[/cyan], [cyan]acc[/cyan]     Effectiveness index breakdown
   [cyan]alert_stats[/cyan]       Alert accuracy statistics
@@ -845,13 +847,15 @@ class MultiSymbolCLI:
   [cyan]switch[/cyan], [cyan]sw[/cyan]        Switch to different symbol
   [cyan]alerts[/cyan]            Configure price alerts (on/off/threshold)
   [cyan]model[/cyan]             Switch forecasting model (kalman/automl)
+  [cyan]horizon[/cyan]           Configure forecast horizon (default: 15min)
   [cyan]help[/cyan]              Show this help
   [cyan]quit[/cyan], [cyan]q[/cyan]           Exit
 
 [bold]Continuous Forecasting:[/bold]
   [dim]Forecasts are auto-generated every {interval}s in the background[/dim]
-  [dim]• Predictions are validated automatically after 5 minutes[/dim]
+  [dim]• Predictions are validated automatically after horizon period[/dim]
   [dim]• Alerts trigger when price change exceeds threshold[/dim]
+  [dim]• Alert confidence based on data quantity + model accuracy[/dim]
 
 [bold]Adaptive Parameter Tuning:[/bold]
   [dim]System automatically adjusts alert threshold based on accuracy[/dim]
@@ -951,6 +955,11 @@ class MultiSymbolCLI:
         current = alert_data['current']
         predicted = alert_data['predicted']
         expiry_time = alert_data['expiry_time'].strftime('%H:%M:%S')
+        horizon = alert_data.get('horizon', 15)
+        confidence_index = alert_data.get('confidence_index', 50)
+        confidence_level = alert_data.get('confidence_level', 'MEDIA')
+        confidence_color = alert_data.get('confidence_color', 'yellow')
+        n_samples = alert_data.get('n_samples', 0)
 
         # Print alert immediately (interrupts prompt)
         print()  # New line
@@ -959,7 +968,13 @@ class MultiSymbolCLI:
             f"  [{color}]• {symbol_key}[/{color}] ({symbol_name}): {direction} "
             f"[bold]{change_pct:+.2f}%[/bold] | ${current:.2f} → ${predicted:.2f}"
         )
-        console.print(f"  [dim]Válida hasta: {expiry_time}[/dim]")
+        console.print(
+            f"  [dim]Horizonte: {horizon} min | Válida hasta: {expiry_time}[/dim]"
+        )
+        console.print(
+            f"  Confianza: [{confidence_color}]{confidence_level} ({confidence_index}/100)[/{confidence_color}] "
+            f"[dim]| {n_samples} muestras[/dim]"
+        )
         print()  # New line for separation
 
     def _display_alerts(self):
@@ -1085,6 +1100,44 @@ class MultiSymbolCLI:
             console.print(f"[red]Unknown model:[/red] {target}")
             console.print("[dim]Available: kalman, automl[/dim]")
 
+    def cmd_horizon(self, args):
+        """Configure forecast horizon (in minutes)."""
+        if not args:
+            # Show current horizon
+            console.print(f"\n[bold]Current Forecast Horizon:[/bold] {self.forecast_horizon} minutes")
+            console.print(f"\n[dim]Usage:[/dim]")
+            console.print(f"  [cyan]horizon 5[/cyan]   - 5-minute predictions")
+            console.print(f"  [cyan]horizon 15[/cyan]  - 15-minute predictions (default)")
+            console.print(f"  [cyan]horizon 30[/cyan]  - 30-minute predictions")
+            console.print(f"\n[dim]Note: Longer horizons may have higher uncertainty[/dim]")
+            return
+
+        try:
+            new_horizon = int(args[0])
+            if new_horizon < 1 or new_horizon > 60:
+                console.print("[red]Horizon must be between 1 and 60 minutes[/red]")
+                return
+
+            old_horizon = self.forecast_horizon
+            self.forecast_horizon = new_horizon
+
+            # Update all forecasters
+            for forecaster in self.forecasters.values():
+                forecaster.horizon_minutes = new_horizon
+                # Update internal Kalman if it's Ensemble
+                if hasattr(forecaster, 'kalman'):
+                    forecaster.kalman.horizon_minutes = new_horizon
+
+            # Clear forecasts (will regenerate with new horizon)
+            self.last_forecasts.clear()
+
+            console.print(f"[green]✓ Forecast horizon changed: {old_horizon} → {new_horizon} minutes[/green]")
+            console.print(f"[dim]Alerts will now expire after {new_horizon} minutes[/dim]")
+
+        except ValueError:
+            console.print(f"[red]Invalid horizon:[/red] {args[0]}")
+            console.print("[dim]Please provide a number (e.g., '15')[/dim]")
+
     def cmd_quit(self):
         """Exit REPL."""
         self.running = False
@@ -1148,9 +1201,49 @@ class MultiSymbolCLI:
                                 direction = "↗" if change_pct > 0 else "↘"
                                 color = "green" if change_pct > 0 else "red"
 
-                                # Calculate alert expiry (forecast time + 5 min)
+                                # Calculate alert expiry (forecast time + horizon)
                                 forecast_time = datetime.fromisoformat(forecast['timestamp'])
-                                expiry_time = forecast_time + timedelta(minutes=5)
+                                horizon = forecast.get('horizon_minutes', self.forecast_horizon)
+                                expiry_time = forecast_time + timedelta(minutes=horizon)
+
+                                # Calculate confidence index (0-100) based on:
+                                # 1. Data quantity (more data = higher confidence)
+                                # 2. Model uncertainty (lower uncertainty = higher confidence)
+                                # 3. Historical accuracy (if available)
+                                n_samples = len(historial)
+                                data_score = min(n_samples / 100, 1.0) * 40  # Max 40 points (100+ samples = full score)
+
+                                uncertainty = forecast.get('uncertainty', 0.5)
+                                uncertainty_score = max(0, 1 - uncertainty) * 30  # Max 30 points
+
+                                # Get prediction metrics if available
+                                tracker = self.trackers.get(key)
+                                accuracy_score = 15  # Default baseline
+                                if tracker:
+                                    metrics = tracker.get_accuracy_metrics()
+                                    if metrics['validated_predictions'] >= 3:
+                                        # Use effectiveness index (0-100) scaled to 30 points
+                                        accuracy_score = (metrics['effectiveness_index'] / 100) * 30
+
+                                confidence_index = int(data_score + uncertainty_score + accuracy_score)
+                                confidence_index = min(max(confidence_index, 0), 100)  # Clamp 0-100
+
+                                # Confidence level text
+                                if confidence_index >= 80:
+                                    confidence_level = "MUY ALTA"
+                                    confidence_color = "bright_green"
+                                elif confidence_index >= 65:
+                                    confidence_level = "ALTA"
+                                    confidence_color = "green"
+                                elif confidence_index >= 50:
+                                    confidence_level = "MEDIA"
+                                    confidence_color = "yellow"
+                                elif confidence_index >= 35:
+                                    confidence_level = "BAJA"
+                                    confidence_color = "orange"
+                                else:
+                                    confidence_level = "MUY BAJA"
+                                    confidence_color = "red"
 
                                 alert_data = {
                                     'forecast': forecast,
@@ -1160,7 +1253,12 @@ class MultiSymbolCLI:
                                     'current': forecast['current_price'],
                                     'predicted': forecast['prediction'],
                                     'forecast_time': forecast_time,
-                                    'expiry_time': expiry_time
+                                    'expiry_time': expiry_time,
+                                    'horizon': horizon,
+                                    'confidence_index': confidence_index,
+                                    'confidence_level': confidence_level,
+                                    'confidence_color': confidence_color,
+                                    'n_samples': n_samples
                                 }
 
                                 # Only trigger if it's a new alert (not already pending)
@@ -1177,6 +1275,9 @@ class MultiSymbolCLI:
                                         'predicted_change_pct': change_pct,
                                         'direction': direction,
                                         'threshold': self.alert_threshold,
+                                        'horizon': horizon,
+                                        'confidence_index': confidence_index,
+                                        'n_samples': n_samples,
                                         'validated': False,
                                         'actual_price': None,
                                         'actual_change_pct': None,

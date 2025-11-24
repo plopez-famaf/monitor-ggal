@@ -126,12 +126,12 @@ class KalmanFilter:
 class GGALForecaster:
     """
     Simplified forecaster using only Kalman Filter.
-    Focused on 5-minute predictions for optimal performance.
+    Focused on 15-minute predictions for optimal performance.
     """
 
-    def __init__(self, min_samples=10, horizon_minutes=5, process_noise=0.01, measurement_noise=0.1):
+    def __init__(self, min_samples=10, horizon_minutes=15, process_noise=0.01, measurement_noise=0.1):
         self.min_samples = min_samples
-        self.horizon_minutes = horizon_minutes  # Fixed at 5 minutes
+        self.horizon_minutes = horizon_minutes  # Default: 15 minutes
         self.kf = None
 
         # Tunable parameters (can be adjusted by adaptive tuning)
@@ -158,11 +158,11 @@ class GGALForecaster:
     def forecast(self, historial, horizon_minutes=None):
         """
         Generate forecast using Kalman Filter.
-        Fixed at 5-minute horizon for consistency.
+        Default 15-minute horizon for consistency.
 
         Args:
             historial: Price history deque
-            horizon_minutes: Ignored (always uses 5 minutes)
+            horizon_minutes: Forecast horizon (default: 15 minutes)
 
         Returns:
             dict with prediction, confidence, and metadata
@@ -171,8 +171,9 @@ class GGALForecaster:
         if prices is None:
             return None
 
-        # Always use 5 minutes for consistency
-        horizon_minutes = self.horizon_minutes
+        # Use default horizon if not specified
+        if horizon_minutes is None:
+            horizon_minutes = self.horizon_minutes
 
         # Initialize/reinitialize filter with latest data
         self._initialize_filter(prices)
@@ -218,19 +219,19 @@ class GGALForecaster:
 
     def get_all_forecasts(self, historial, horizons=None):
         """
-        Get forecast (always 5 minutes).
+        Get forecast (default 15 minutes).
         'horizons' parameter ignored for backward compatibility.
 
         Args:
             historial: Price history
-            horizons: Ignored (always returns 5-min forecast)
+            horizons: Ignored (always returns default horizon forecast)
 
         Returns:
-            dict with single 5-min forecast
+            dict with single forecast at default horizon
         """
         forecast = self.forecast(historial)
         if forecast:
-            return {'5min': forecast}
+            return {f'{self.horizon_minutes}min': forecast}
         return {}
 
     def generate_trading_signal(self, historial):

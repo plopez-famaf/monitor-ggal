@@ -14,14 +14,14 @@ This eliminates the need for manual parameter tuning and ensures the system cont
 
 ### 1. Alert Accuracy Tracking
 
-Every triggered alert is validated after 5 minutes:
+Every triggered alert is validated after the forecast horizon period (default: 15 minutes, configurable via `horizon` command):
 - **Direction**: Did we predict the correct price movement direction?
 - **Magnitude**: Did the actual price change exceed the threshold?
 - **Combined accuracy**: Alert is "correct" if BOTH conditions are met
 
 ### 2. Prediction Accuracy Tracking
 
-Every forecast is validated after 5 minutes:
+Every forecast is validated after the horizon period:
 - **MAPE** (Mean Absolute Percentage Error): Price prediction accuracy
 - **Directional Accuracy**: Did we predict correct movement direction?
 - **Effectiveness Index**: Composite score (0-100) combining all metrics
@@ -118,7 +118,7 @@ Current configuration is effective
 **Metrics explained:**
 - **Overall Accuracy**: All-time correct alerts / validated alerts
 - **Recent**: Last 10 validated alerts (shows trending performance)
-- **Pending**: Alerts waiting for 5-minute validation period
+- **Pending**: Alerts waiting for horizon validation period (default: 15 minutes)
 - **Per-symbol**: Breakdown by each monitored asset
 
 ## Configuration
@@ -149,6 +149,20 @@ python cli.py
 ```
 
 This sets the initial value. Adaptive tuning will adjust from here.
+
+### Forecast Horizon
+
+```bash
+# Set default horizon (default: 15 minutes)
+export FORECAST_HORIZON=30
+python cli.py
+
+# Or change at runtime with the 'horizon' command:
+ggal> horizon 30
+✓ Forecast horizon changed: 15 → 30 minutes
+```
+
+This affects prediction timeframe and alert validation timing.
 
 ## Example Scenarios
 
@@ -287,19 +301,19 @@ Result: ✗ INCORRECT (direction did NOT match)
 
 - **Check interval**: Every 10 validated alerts
 - **Minimum data**: Requires at least 10 validated alerts before first tuning
-- **Validation delay**: 5 minutes after alert is triggered
+- **Validation delay**: Forecast horizon period after alert is triggered (default: 15 minutes)
 
-**Timeline example:**
+**Timeline example (with 15-minute horizon):**
 ```
 00:00 - Alert 1 triggered
 00:30 - Alert 2 triggered
 01:00 - Alert 3 triggered
 ...
-05:00 - Alert 1 validated (5 min passed)
+00:15 - Alert 1 validated (15 min passed)
 ...
-05:30 - Alert 10 triggered
-10:30 - Alert 10 validated
-10:30 - 🔧 Auto-Tuning runs (10 alerts validated)
+02:30 - Alert 10 triggered
+02:45 - Alert 10 validated
+02:45 - 🔧 Auto-Tuning runs (10 alerts validated)
 ```
 
 ### Thread Safety
